@@ -42,7 +42,7 @@ PYTHON        = sys.executable
 # ---------------------------------------------------------------------------
 # Version + auto-update
 # ---------------------------------------------------------------------------
-VERSION = "0.1.0"   # <-- bump this, push to main; CI tags a release v<VERSION>
+VERSION = "0.1.1"   # <-- bump this, push to main; CI tags a release v<VERSION>
 
 # Your GitHub repo, "owner/name". The updater hits the public Releases API.
 # If you rename the repo, change this string (it's the only place it lives).
