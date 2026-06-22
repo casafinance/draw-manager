@@ -43,13 +43,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'Continue'
           $tag = "${{ steps.ver.outputs.tag }}"
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) {
+          gh release view $tag 2>$null | Out-Null
+          $code = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          if ($code -eq 0) {
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             Write-Host "Release $tag already exists - will skip build."
           } else {
             "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "No existing release $tag - will build."
           }
 
       - name: Install dependencies
