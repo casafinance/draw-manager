@@ -83,6 +83,22 @@ jobs:
           if (-not (Test-Path "dist/Draw Manager.exe")) { Write-Error "Missing dist/Draw Manager.exe"; exit 1 }
           if (-not (Test-Path "dist/draw-request.exe")) { Write-Error "Missing dist/draw-request.exe"; exit 1 }
 
+      - name: Build installer (Inno Setup)
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          # Inno Setup is preinstalled on windows-latest runners as ISCC.exe,
+          # but install via Chocolatey to be safe if the image changes.
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress -y
+          }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\draw-manager.iss"
+          if (-not (Test-Path "installer\installer_output\Draw-Manager-Setup.exe")) {
+            Write-Error "Installer was not produced"; exit 1
+          }
+
       - name: Create release and upload assets
         if: steps.exists.outputs.skip == 'false'
         shell: pwsh
@@ -91,7 +107,8 @@ jobs:
         run: |
           $tag = "${{ steps.ver.outputs.tag }}"
           gh release create $tag `
+            "installer/installer_output/Draw-Manager-Setup.exe" `
             "dist/Draw Manager.exe" `
             "dist/draw-request.exe" `
             --title $tag `
-            --notes "Automated build of $tag from commit ${{ github.sha }}."
+            --notes "Automated build of $tag from commit ${{ github.sha }}.`n`nMost users want **Draw-Manager-Setup.exe** (the installer)."
