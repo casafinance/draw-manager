@@ -1,0 +1,30 @@
+# ---- secrets / credentials (NEVER commit) ----
+google-credentials.json
+*credentials*.json
+*.pem
+*.key
+
+# ---- user runtime state ----
+settings.json
+draws.db
+draws.db-journal
+draws.db-wal
+draws.db-shm
+
+# ---- playwright browser profiles ----
+.pw-profile/
+.pw-profile-w*/
+
+# ---- python / build artifacts ----
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec.bak
+
+# ---- misc local debug captures ----
+cf_extract_failed*.png
+
+# ---- auto-updater runtime artifact ----
+_dm_update.bat

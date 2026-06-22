@@ -1,0 +1,93 @@
+name: build-release
+
+# Build both Windows exes and publish a GitHub Release on every push to main.
+# The release is tagged v<VERSION>, where VERSION is read from app.py.
+# If a release for that version already exists, the build is skipped (so you
+# only cut a release when you bump VERSION in app.py).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
+
+permissions:
+  contents: write          # needed to create releases & upload assets
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read VERSION from app.py
+        id: ver
+        shell: pwsh
+        run: |
+          $line = Select-String -Path app.py -Pattern '^VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $line) { Write-Error "Could not find VERSION in app.py"; exit 1 }
+          $v = $line.Matches[0].Groups[1].Value
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=v$v"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Detected version $v"
+
+      - name: Check if release already exists
+        id: exists
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "Release $tag already exists - will skip build."
+          } else {
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Install dependencies
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # Core runtime deps. Adjust if you add libraries to the app.
+          pip install pywebview google-api-python-client google-auth google-auth-httplib2 openpyxl playwright pyinstaller
+          # If you keep a requirements.txt, prefer:
+          #   if (Test-Path requirements.txt) { pip install -r requirements.txt }
+
+      - name: Build Draw Manager.exe
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: pyinstaller --clean --noconfirm "Draw Manager.spec"
+
+      - name: Build draw-request.exe
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: pyinstaller --clean --noconfirm "draw-request.spec"
+
+      - name: Verify both exes exist
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/Draw Manager.exe")) { Write-Error "Missing dist/Draw Manager.exe"; exit 1 }
+          if (-not (Test-Path "dist/draw-request.exe")) { Write-Error "Missing dist/draw-request.exe"; exit 1 }
+
+      - name: Create release and upload assets
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          gh release create $tag `
+            "dist/Draw Manager.exe" `
+            "dist/draw-request.exe" `
+            --title $tag `
+            --notes "Automated build of $tag from commit ${{ github.sha }}."

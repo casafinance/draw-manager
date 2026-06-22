@@ -1,0 +1,2814 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draw Manager</title>
+<script>
+  // Apply cached theme BEFORE the body paints to avoid a flash of Blueprint
+  // when the persisted setting is Light. The canonical store is settings.json
+  // (loaded async after startup); localStorage is just a fast-path mirror.
+  try {
+    var t = localStorage.getItem('dm_theme');
+    if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  } catch (e) {}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@100;200;300;400;700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:       #D8E4EF;
+    --paper-2:     #C7D6E3;
+    --paper-3:     #B5C7D7;
+    --white:       #F1F6FB;
+    --line:        #5E7B97;
+    --line-soft:   #95ACC1;
+    --line-faint:  #B6C5D4;
+    --ink:         #0A1A2E;
+    --ink-2:       #1E3556;
+    --ink-3:       #4A6585;
+    --red:         #C8362D;
+    --red-2:       #9E261E;
+    --red-soft:    rgba(200,54,45,.10);
+    --ok:          #2E6E3C;
+    --warn:        #B25500;
+
+    --f-disp:      'Big Shoulders Display', sans-serif;
+    --f-body:      'Geist', system-ui, sans-serif;
+    --f-mono:      'Geist Mono', ui-monospace, monospace;
+
+    --t-fast:      120ms cubic-bezier(.4,0,.2,1);
+    --t-med:       260ms cubic-bezier(.4,0,.2,1);
+    --titlebar-h:  34px;
+  }
+
+  /* ============ LIGHT theme override ============
+     Set on <html data-theme="light">. Re-skins everything by overriding
+     the same custom properties — no other CSS rule needs to change. */
+  html[data-theme="light"] {
+    --paper:       #FAFAFA;
+    --paper-2:     #F2F2F2;
+    --paper-3:     #E5E5E5;
+    --white:       #FFFFFF;
+    --line:        #B8B8B8;
+    --line-soft:   #D4D4D4;
+    --line-faint:  #EAEAEA;
+    --ink:         #1A1A1A;
+    --ink-2:       #4A4A4A;
+    --ink-3:       #8A8A8A;
+    --red:         #C8362D;
+    --red-2:       #9E261E;
+    --red-soft:    rgba(200,54,45,.08);
+    --ok:          #2E6E3C;
+    --warn:        #B25500;
+  }
+  /* Light theme: drop the blueprint graph paper background. */
+  html[data-theme="light"] body {
+    background-image: none;
+    background: var(--paper);
+  }
+  /* Light theme: terminal stays dark so it still reads as a console
+     (this is what users expect from a CLI panel even in light mode). */
+  html[data-theme="light"] .terminal {
+    background: #1A1A1A; color: #E8E8E8;
+  }
+  html[data-theme="light"] .terminal::before {
+    background: #1A1A1A;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--f-body); font-weight: 450;
+    font-size: 15px; line-height: 1.55; color: var(--ink);
+    background: var(--paper);
+    background-image:
+      linear-gradient(rgba(94,123,151,.18) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(94,123,151,.18) 1px, transparent 1px),
+      linear-gradient(rgba(94,123,151,.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(94,123,151,.07) 1px, transparent 1px);
+    background-size: 96px 96px, 96px 96px, 16px 16px, 16px 16px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    user-select: none;
+  }
+  input, textarea { user-select: text; }
+  #dbg-hud, #dbg-hud * { user-select: text; -webkit-user-select: text; cursor: text; }
+  #dbg-hud button { cursor: pointer; }
+  /* Allow selecting + copying terminal output (script run panel). */
+  .terminal, .terminal * {
+    user-select: text; -webkit-user-select: text; cursor: text;
+  }
+  .terminal-copy {
+    position: absolute; top: 6px; right: 8px;
+    all: unset; cursor: pointer;
+    font-family: var(--f-mono); font-size: 10px; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase;
+    color: #C9D6E2; background: rgba(255,255,255,.06);
+    padding: 3px 8px; border: 1px solid rgba(255,255,255,.18);
+    transition: background var(--t-fast), color var(--t-fast);
+  }
+  .terminal-copy:hover { background: rgba(255,255,255,.14); color: #fff; }
+  .terminal-copy.copied { background: var(--ok); color: #fff; border-color: var(--ok); }
+  ::selection { background: var(--red); color: var(--white); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line-faint); border: 2px solid var(--paper); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--line); }
+
+  /* ============ Titlebar ============ */
+  .titlebar {
+    height: var(--titlebar-h);
+    background: var(--paper-2); border-bottom: 1px solid var(--line);
+    display: flex; align-items: stretch;
+    position: fixed; inset: 0 0 auto 0;
+    z-index: 100;
+    -webkit-app-region: drag;
+  }
+  .tb-brand {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 14px;
+    border-right: 1px solid var(--line-soft);
+    font-family: var(--f-mono);
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .18em;
+    color: var(--ink);
+  }
+  .tb-spacer { flex: 1; }
+  .tb-meta {
+    display: flex; align-items: center; padding: 0 14px;
+    font-family: var(--f-mono);
+    font-size: 10.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .16em;
+    color: var(--ink-2);
+    border-left: 1px solid var(--line-soft);
+  }
+  .tb-meta.sync {
+    cursor: pointer; transition: background var(--t-fast);
+  }
+  .tb-meta.sync:hover { background: var(--paper-3); }
+  .tb-meta.sync.err { color: var(--red); }
+  .tb-meta.sync .dot {
+    display: inline-block; width: 6px; height: 6px;
+    background: var(--ok); margin-right: 6px;
+    transform: translateY(-1px);
+  }
+  .tb-meta.sync.err .dot { background: var(--red); }
+  .tb-meta.sync.never .dot { background: var(--ink-3); }
+  .tb-controls { display: flex; -webkit-app-region: no-drag; }
+  .winbtn {
+    all: unset; width: 46px;
+    display: grid; place-items: center; cursor: pointer;
+    color: var(--ink-2);
+    transition: background var(--t-fast), color var(--t-fast);
+    border-left: 1px solid var(--line-soft);
+  }
+  .winbtn:hover { background: var(--paper-3); color: var(--ink); }
+  .winbtn.close:hover { background: var(--red); color: var(--white); }
+
+  /* Logo D — staircase */
+  .logo-step {
+    display: inline-flex; align-items: flex-end; gap: 1.5px;
+    height: 14px;
+  }
+  .logo-step span {
+    width: 3px; background: currentColor;
+    display: block;
+  }
+  .logo-step span:nth-child(1) { height: 25%; }
+  .logo-step span:nth-child(2) { height: 45%; }
+  .logo-step span:nth-child(3) { height: 65%; }
+  .logo-step span:nth-child(4) { height: 85%; }
+  .logo-step span:nth-child(5) { height: 100%; background: var(--red); }
+
+  /* ============ Layout ============ */
+  .app {
+    position: fixed; inset: var(--titlebar-h) 0 0 0;
+    display: grid; grid-template-columns: 240px 1fr;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--paper-2); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    padding: 22px 16px; position: relative; overflow: hidden;
+  }
+  .sidebar::before, .sidebar::after {
+    content: ''; position: absolute;
+    width: 14px; height: 14px; border: 1px solid var(--ink);
+    pointer-events: none;
+  }
+  .sidebar::before { top: 10px; left: 10px; border-right: none; border-bottom: none; }
+  .sidebar::after  { bottom: 10px; left: 10px; border-right: none; border-top: none; }
+
+  .side-head {
+    padding: 4px 6px 16px;
+    border-bottom: 1px solid var(--line-soft);
+    margin-bottom: 16px;
+  }
+  .side-head .label {
+    font-family: var(--f-mono);
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .22em;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .side-brand {
+    display: flex; align-items: flex-end; gap: 10px;
+  }
+  .side-brand .logo-big {
+    display: inline-flex; align-items: flex-end; gap: 2.5px;
+    height: 30px;
+  }
+  .side-brand .logo-big span {
+    width: 5px; background: var(--ink); display: block;
+  }
+  .side-brand .logo-big span:nth-child(1) { height: 25%; }
+  .side-brand .logo-big span:nth-child(2) { height: 45%; }
+  .side-brand .logo-big span:nth-child(3) { height: 65%; }
+  .side-brand .logo-big span:nth-child(4) { height: 85%; }
+  .side-brand .logo-big span:nth-child(5) { height: 100%; background: var(--red); }
+  .side-head .num {
+    font-family: var(--f-disp); font-weight: 200;
+    font-size: 32px; line-height: .95;
+    color: var(--ink); letter-spacing: .02em;
+  }
+  .side-head .sub {
+    font-family: var(--f-mono);
+    font-size: 10.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .16em;
+    color: var(--ink-2); margin-top: 4px;
+  }
+  .nav-label {
+    font-family: var(--f-mono);
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .22em;
+    color: var(--ink-3); margin: 14px 6px 6px;
+  }
+  .nav { display: flex; flex-direction: column; gap: 1px; }
+  .nav button {
+    all: unset; cursor: pointer;
+    padding: 8px 12px;
+    font-family: var(--f-body);
+    font-size: 14px; font-weight: 500;
+    color: var(--ink);
+    display: flex; align-items: center; gap: 12px;
+    transition: background var(--t-fast), color var(--t-fast);
+    position: relative;
+  }
+  .nav button::before {
+    content: ''; width: 6px; height: 1px;
+    background: var(--line); flex-shrink: 0;
+    transition: width var(--t-fast), background var(--t-fast);
+  }
+  .nav button:hover { background: var(--paper); }
+  .nav button:hover::before { background: var(--red); width: 10px; }
+  .nav button[aria-current="true"] { color: var(--red); background: var(--paper); }
+  .nav button[aria-current="true"]::before { background: var(--red); width: 14px; height: 2px; }
+  .nav .badge {
+    margin-left: auto;
+    font-family: var(--f-mono);
+    font-size: 10.5px; font-weight: 600;
+    color: var(--ink-2); background: var(--paper);
+    border: 1px solid var(--line-soft);
+    padding: 1px 6px;
+  }
+  .nav button[aria-current="true"] .badge { color: var(--red); border-color: var(--red); }
+
+  .side-foot {
+    margin-top: auto; padding-top: 14px;
+    border-top: 1px solid var(--line-soft);
+    font-family: var(--f-mono);
+    font-size: 10.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .16em;
+    color: var(--ink-2);
+    display: grid; gap: 4px;
+  }
+  .side-foot .row { display: flex; justify-content: space-between; }
+  .pulse {
+    display: inline-block; width: 7px; height: 7px;
+    background: var(--ok); border-radius: 50%;
+    margin-right: 6px; vertical-align: middle;
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(46,110,60,.5); }
+    50%     { opacity: .55; box-shadow: 0 0 0 4px rgba(46,110,60,0); }
+  }
+
+  /* Main */
+  .main { overflow: auto; display: flex; flex-direction: column; }
+  .topbar {
+    height: 48px; padding: 0 28px;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--paper); position: sticky; top: 0; z-index: 5;
+  }
+  .crumb {
+    font-family: var(--f-mono);
+    font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .16em;
+    color: var(--ink-2);
+  }
+  .crumb b { color: var(--ink); font-weight: 600; }
+  .topbar-right {
+    display: flex; gap: 12px; align-items: center;
+    font-family: var(--f-mono);
+    font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink-2);
+  }
+
+  .view { padding: 32px 40px 56px; max-width: 100%; }
+  .view-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    padding-bottom: 22px; margin-bottom: 28px;
+    position: relative;
+    border-bottom: 1px solid var(--line);
+  }
+  .view-header::after {
+    content: ''; position: absolute;
+    left: 0; bottom: -1px; width: 64px; height: 3px;
+    background: var(--red);
+  }
+  .view-title {
+    font-family: var(--f-disp); font-weight: 100;
+    font-size: 82px; line-height: .85;
+    letter-spacing: -.005em; color: var(--ink);
+  }
+  .view-sub {
+    font-family: var(--f-mono);
+    font-size: 11.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .16em;
+    color: var(--ink-2); margin-top: 12px; max-width: 62ch;
+  }
+  .view-aside {
+    font-family: var(--f-mono);
+    font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink-2);
+    text-align: right; line-height: 1.7;
+  }
+  .view-aside b { color: var(--red); font-weight: 600; }
+
+  /* Stats / inbox / kanban / loans / settings (mostly unchanged) */
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--line);
+    background: var(--paper-2); margin-bottom: 40px;
+  }
+  .stat { padding: 20px 18px 16px; border-right: 1px solid var(--line-soft); position: relative; }
+  .stat:last-child { border-right: none; }
+  .stat::before {
+    content: ''; position: absolute; top: 8px; right: 8px;
+    width: 6px; height: 6px; border: 1px solid var(--line);
+  }
+  .stat-label {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .18em;
+    color: var(--ink-2); margin-bottom: 10px;
+  }
+  .stat-value {
+    font-family: var(--f-disp); font-weight: 200;
+    font-size: 46px; line-height: 1; color: var(--ink);
+  }
+  .stat-value small { font-size: 13px; color: var(--ink-2); margin-left: 4px; font-weight: 400; }
+  .stat-trend {
+    font-family: var(--f-mono); font-size: 11px; color: var(--ok);
+    margin-top: 8px; text-transform: uppercase; letter-spacing: .14em; font-weight: 500;
+  }
+  .stat-trend.warn { color: var(--red); }
+  .stat-trend.muted { color: var(--ink-3); }
+
+  .section-title {
+    font-family: var(--f-disp); font-weight: 300;
+    font-size: 28px; letter-spacing: .01em; margin-bottom: 4px;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .section-title small {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .18em; color: var(--ink-2);
+  }
+  .section-rule {
+    height: 1px; background: var(--line-soft);
+    margin: 12px 0 18px; position: relative;
+  }
+  .section-rule::before {
+    content: ''; position: absolute; left: 0; top: -3px;
+    width: 6px; height: 6px; background: var(--red);
+  }
+
+  .inbox { border: 1px solid var(--line-soft); background: var(--white); }
+  .inbox-item {
+    display: grid;
+    grid-template-columns: 100px 80px 1fr auto auto;
+    align-items: center; gap: 16px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line-faint);
+    cursor: pointer; transition: background var(--t-fast);
+  }
+  .inbox-item:last-child { border-bottom: none; }
+  .inbox-item:hover { background: var(--paper); }
+  .inbox-item.stale { border-left: 3px solid var(--red); padding-left: 13px; }
+  .inbox-cf { font-family: var(--f-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .inbox-state {
+    font-family: var(--f-mono); font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .12em;
+    color: var(--ink-2); background: var(--paper);
+    border: 1px solid var(--line-soft);
+    padding: 3px 8px; white-space: nowrap; text-align: center;
+  }
+  .inbox-item.stale .inbox-state { border-color: var(--red); color: var(--red); }
+  .inbox-addr {
+    font-family: var(--f-body); font-size: 14.5px; font-weight: 500;
+    color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .inbox-addr small {
+    display: block;
+    font-family: var(--f-body); font-size: 12.5px; font-weight: 400;
+    color: var(--ink-2); margin-top: 2px;
+  }
+  .inbox-draw {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 500;
+    color: var(--ink-2); text-align: right;
+  }
+  .inbox-days {
+    font-family: var(--f-mono); font-size: 12px; font-weight: 600;
+    color: var(--ink-2); min-width: 60px; text-align: right;
+  }
+  .inbox-days.stale { color: var(--red); }
+
+  .empty {
+    padding: 48px;
+    border: 1px dashed var(--line);
+    text-align: center; color: var(--ink-2);
+    font-family: var(--f-mono);
+    font-size: 11.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em;
+    background: repeating-linear-gradient(45deg, transparent 0 8px, rgba(94,123,151,.06) 8px 9px);
+  }
+
+  /* Kanban */
+  .kanban-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+    font-family: var(--f-mono);
+    font-size: 11.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em; color: var(--ink-2);
+  }
+  .kanban-bar b { color: var(--red); font-weight: 700; }
+  .kanban {
+    display: flex; gap: 12px;
+    overflow-x: auto; padding-bottom: 16px;
+    align-items: flex-start;
+  }
+  .col {
+    flex: 0 0 230px;
+    background: var(--paper-2); border: 1px solid var(--line-soft);
+    display: flex; flex-direction: column;
+    min-height: 200px; max-height: calc(100vh - 280px);
+  }
+  .col-head {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--paper);
+    font-family: var(--f-mono);
+    font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em; color: var(--ink);
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; top: 0;
+  }
+  .col-head .count {
+    color: var(--ink-2); background: var(--paper-2);
+    border: 1px solid var(--line-soft); padding: 1px 6px; font-size: 10px;
+  }
+  .col-body {
+    padding: 8px; display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto; flex: 1;
+  }
+  .card {
+    background: var(--white); border: 1px solid var(--line-soft);
+    padding: 10px 11px; position: relative;
+    transition: all var(--t-fast); cursor: pointer;
+  }
+  .card:hover {
+    border-color: var(--ink);
+    transform: translateY(-1px);
+    box-shadow: 3px 3px 0 var(--line-faint);
+  }
+  .card.stale { border-left: 3px solid var(--red); padding-left: 9px; }
+  .card[draggable="true"] { cursor: grab; }
+  .card[draggable="true"]:active { cursor: grabbing; }
+  .card.dragging { opacity: .35; }
+  .col.drop-target { background: var(--red-soft, #fce8eb); }
+  .col.drop-target .col-head { background: var(--red); color: var(--white); }
+
+  /* Kanban toolbar (sort dropdown sits above the columns) */
+  .kanban-toolbar {
+    display: flex; gap: 14px; align-items: center;
+    margin-bottom: 10px;
+    font-family: var(--f-mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--ink-2);
+  }
+  .kanban-toolbar select {
+    font-family: var(--f-mono); font-size: 11px;
+    padding: 3px 6px; border: 1px solid var(--line);
+    background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  .kanban-toolbar button {
+    font-family: var(--f-mono); font-size: 11px; cursor: pointer;
+    padding: 3px 10px; border: 1px solid var(--line);
+    background: var(--paper); color: var(--ink);
+  }
+  .kanban-toolbar button:hover { background: var(--ink); color: var(--white); }
+  .card-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .card-cf {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 700;
+    color: var(--ink); letter-spacing: .04em;
+  }
+  .card-draw {
+    font-family: var(--f-mono); font-size: 10px; font-weight: 600;
+    color: var(--ink-2); background: var(--paper-2); padding: 1px 5px;
+  }
+  .card-addr {
+    font-family: var(--f-disp); font-weight: 300;
+    font-size: 17px; line-height: 1.1; color: var(--ink);
+    margin-bottom: 2px;
+    overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .card-name {
+    font-family: var(--f-body); font-size: 12px; color: var(--ink-2);
+    margin-bottom: 8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card-foot {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-top: 6px; border-top: 1px solid var(--line-faint);
+    font-family: var(--f-mono); font-size: 11px; font-weight: 500;
+    color: var(--ink-2);
+  }
+  .card-foot .amount { font-weight: 600; color: var(--ink); }
+  .card.stale .card-foot .days { color: var(--red); font-weight: 700; }
+
+  /* Loans */
+  .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+  .search { flex: 1; max-width: 420px; position: relative; }
+  .search input {
+    width: 100%; padding: 10px 12px 10px 36px;
+    background: var(--white); border: 1px solid var(--line);
+    font-family: var(--f-mono); font-size: 13px; color: var(--ink);
+  }
+  .search::before {
+    content: '⌕'; position: absolute; left: 12px; top: 50%;
+    transform: translateY(-50%); color: var(--ink-2); font-size: 16px;
+  }
+  .search input:focus { outline: 1px solid var(--red); border-color: var(--red); }
+  .loans-table {
+    width: 100%; border: 1px solid var(--line-soft);
+    background: var(--white); border-collapse: collapse;
+  }
+  .loans-table thead th {
+    background: var(--paper-2); border-bottom: 1px solid var(--line);
+    padding: 10px 14px;
+    font-family: var(--f-mono); font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink-2); text-align: left; position: sticky; top: 0;
+  }
+  .loans-table tbody tr {
+    border-bottom: 1px solid var(--line-faint);
+    cursor: pointer; transition: background var(--t-fast);
+  }
+  .loans-table tbody tr:hover { background: var(--paper); }
+  .loans-table td { padding: 11px 14px; font-size: 13.5px; }
+  .loans-table td.cf { font-family: var(--f-mono); font-weight: 700; color: var(--ink); }
+  .loans-table td.name { color: var(--ink); font-weight: 500; }
+  .loans-table td.muted { color: var(--ink-2); }
+  .loans-table td.num {
+    font-family: var(--f-mono); text-align: right;
+    color: var(--ink); font-feature-settings: 'tnum';
+  }
+  .loans-table td.num.small { color: var(--ink-2); font-size: 12px; }
+
+  /* Settings */
+  .settings-block { margin-bottom: 32px; }
+  .settings-grid {
+    display: grid; grid-template-columns: 240px 1fr;
+    gap: 0 32px; padding: 16px 0;
+    border-bottom: 1px solid var(--line-faint);
+  }
+  .settings-grid:first-of-type { border-top: 1px solid var(--line-faint); }
+  .settings-grid .key {
+    font-family: var(--f-mono);
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink); padding-top: 8px;
+  }
+  .settings-grid .key small {
+    display: block; color: var(--ink-2);
+    text-transform: none; font-size: 12.5px;
+    letter-spacing: 0; margin-top: 6px;
+    font-family: var(--f-body); font-weight: 450; line-height: 1.45;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  input[type="text"], input[type="password"], input[type="number"], select, textarea {
+    all: unset; box-sizing: border-box;
+    padding: 11px 12px;
+    background: var(--white); border: 1px solid var(--line);
+    font-family: var(--f-mono); font-size: 13px; color: var(--ink);
+    width: 100%; transition: border-color var(--t-fast);
+  }
+  textarea {
+    min-height: 120px; resize: vertical;
+    line-height: 1.4; white-space: pre; overflow: auto;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--red); outline: 1px solid var(--red); outline-offset: -2px;
+  }
+  input::placeholder, textarea::placeholder { color: var(--ink-3); }
+  input:disabled { opacity: .5; }
+
+  .row-inputs { display: flex; gap: 8px; align-items: center; }
+  .row-inputs input { flex: 1; }
+
+  /* Switch */
+  .switch {
+    display: inline-flex; align-items: center; gap: 10px;
+    cursor: pointer; user-select: none;
+  }
+  .switch input { display: none; }
+  .switch .track {
+    width: 36px; height: 18px;
+    background: var(--paper-3);
+    border: 1px solid var(--line);
+    position: relative;
+    transition: background var(--t-fast);
+  }
+  .switch .track::after {
+    content: ''; position: absolute;
+    width: 12px; height: 12px;
+    background: var(--ink);
+    top: 2px; left: 2px;
+    transition: left var(--t-fast), background var(--t-fast);
+  }
+  .switch input:checked + .track { background: var(--red); border-color: var(--red); }
+  .switch input:checked + .track::after { left: 20px; background: var(--white); }
+  .switch .label {
+    font-family: var(--f-mono);
+    font-size: 11.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink);
+  }
+
+  .test-result {
+    margin-top: 10px; padding: 10px 12px;
+    font-family: var(--f-mono); font-size: 12px;
+    background: var(--paper-2);
+    border-left: 3px solid var(--line);
+    color: var(--ink);
+  }
+  .test-result.ok  { border-left-color: var(--ok); }
+  .test-result.err { border-left-color: var(--red); color: var(--red); }
+
+  /* Buttons */
+  .btn {
+    all: unset; cursor: pointer;
+    padding: 11px 20px;
+    font-family: var(--f-mono);
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    background: var(--ink); color: var(--white);
+    transition: all var(--t-fast);
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn:hover { background: var(--red); }
+  .btn.primary { background: var(--red); }
+  .btn.primary:hover { background: var(--red-2); }
+  .btn.ghost {
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--line);
+  }
+  .btn.ghost:hover { border-color: var(--ink); background: var(--paper-2); }
+  .btn.small { padding: 8px 14px; font-size: 11px; }
+
+  /* Scripts grid */
+  .script-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;
+  }
+  .script {
+    background: var(--white); border: 1px solid var(--line-soft);
+    padding: 22px; cursor: pointer; position: relative;
+    transition: all var(--t-med); overflow: hidden;
+  }
+  .script::before {
+    content: ''; position: absolute; inset: 0 auto 0 0;
+    width: 3px; background: var(--red);
+    transform: scaleY(0); transform-origin: top;
+    transition: transform var(--t-med);
+  }
+  .script:hover {
+    border-color: var(--ink);
+    transform: translateY(-1px);
+    box-shadow: 4px 4px 0 var(--line-faint);
+  }
+  .script:hover::before { transform: scaleY(1); }
+  .script-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .script-id {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    color: var(--ink-2); letter-spacing: .18em; text-transform: uppercase;
+  }
+  .script-status {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ok);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .script-status::before {
+    content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
+  }
+  .script-name {
+    font-family: var(--f-disp); font-weight: 300;
+    font-size: 30px; line-height: 1.05; color: var(--ink); margin-bottom: 8px;
+  }
+  .script-desc {
+    color: var(--ink); font-size: 14px; margin-bottom: 18px;
+    max-width: 42ch; line-height: 1.5;
+  }
+  .script-foot {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-top: 14px; border-top: 1px solid var(--line-faint);
+    font-family: var(--f-mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em; color: var(--ink-2);
+  }
+  .script-foot .run-hint {
+    color: var(--red); font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .script-foot .run-hint::after { content: '→'; transition: transform var(--t-fast); }
+  .script:hover .run-hint::after { transform: translateX(4px); }
+
+  /* Run overlay panel */
+  .overlay {
+    position: fixed; inset: var(--titlebar-h) 0 0 0;
+    background: rgba(10,26,46,.4);
+    display: none; align-items: center; justify-content: center;
+    z-index: 50; backdrop-filter: blur(2px);
+  }
+  .overlay.open { display: flex; animation: fade var(--t-med); }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  .panel {
+    width: min(720px, 92vw);
+    max-height: calc(100vh - var(--titlebar-h) - 40px);
+    background: var(--paper); border: 1px solid var(--ink);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    animation: rise var(--t-med);
+    box-shadow: 6px 6px 0 rgba(10,26,46,.2);
+  }
+  @keyframes rise {
+    from { transform: translateY(10px); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+  }
+  .panel-head {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: flex-start;
+    background: var(--paper-2);
+  }
+  .panel-eyebrow {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .18em;
+    color: var(--red); margin-bottom: 6px;
+  }
+  .panel-title {
+    font-family: var(--f-disp); font-weight: 200;
+    font-size: 32px; line-height: 1;
+  }
+  .panel-head-right { display: flex; gap: 6px; align-items: center; }
+  .panel-icon {
+    all: unset; cursor: pointer;
+    width: 32px; height: 32px;
+    display: grid; place-items: center;
+    color: var(--ink-2);
+    transition: color var(--t-fast), background var(--t-fast);
+    border: 1px solid transparent;
+  }
+  .panel-icon:hover { color: var(--ink); background: var(--paper); border-color: var(--line-soft); }
+  .panel-icon.active { color: var(--red); border-color: var(--red); }
+  .panel-icon.close:hover { color: var(--red); }
+  .panel-body { padding: 22px; overflow-y: auto; }
+  .panel-foot {
+    padding: 14px 22px;
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--paper-2);
+  }
+  .panel-foot-note {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em; color: var(--ink-2);
+  }
+  .panel-foot-note.busy { color: var(--red); }
+  .panel-foot-note.done { color: var(--ok); }
+
+  /* Defaults preview line inside run panel */
+  .defaults-preview {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: var(--paper-2);
+    border-left: 2px solid var(--line);
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 8px;
+  }
+  .defaults-preview b { color: var(--ink); font-weight: 600; }
+  .defaults-preview .edit {
+    color: var(--red); cursor: pointer; font-weight: 600;
+  }
+  .defaults-preview .edit:hover { text-decoration: underline; }
+
+  .terminal {
+    background: var(--ink); color: #C9D6E2;
+    padding: 14px 70px 14px 16px;
+    font-family: var(--f-mono);
+    font-size: 12.5px; line-height: 1.55;
+    margin-top: 18px;
+    word-break: break-word; white-space: pre-wrap;
+    border-left: 3px solid var(--red);
+    max-height: 280px; overflow-y: auto;
+    position: relative;
+  }
+  .term-text { display: block; }
+  .terminal::before {
+    content: 'LIVE OUTPUT';
+    position: absolute; top: -9px; left: 12px;
+    background: var(--ink); color: var(--red);
+    padding: 0 6px;
+    font-size: 9.5px; font-weight: 600; letter-spacing: .2em;
+  }
+
+  /* Drawer */
+  .drawer {
+    position: fixed; inset: var(--titlebar-h) 0 0 auto;
+    width: min(680px, 100vw);
+    background: var(--paper); border-left: 1px solid var(--ink);
+    transform: translateX(100%);
+    transition: transform var(--t-med);
+    z-index: 40; overflow-y: auto;
+    box-shadow: -4px 0 0 rgba(10,26,46,.15);
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper-2);
+    display: flex; justify-content: space-between; align-items: flex-start;
+    position: sticky; top: 0; z-index: 1;
+  }
+  .drawer-eyebrow {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .18em; color: var(--red); margin-bottom: 4px;
+  }
+  .drawer-title {
+    font-family: var(--f-disp); font-weight: 200;
+    font-size: 30px; line-height: 1; color: var(--ink);
+  }
+  .drawer-sub {
+    font-family: var(--f-mono); font-size: 11.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink-2); margin-top: 6px;
+  }
+  .drawer-body { padding: 22px 24px 40px; }
+  .draw-row {
+    display: grid; grid-template-columns: 60px 1fr 120px 100px;
+    gap: 14px; align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-faint);
+  }
+  .draw-row:last-child { border-bottom: none; }
+  .draw-num {
+    font-family: var(--f-disp); font-weight: 200;
+    font-size: 28px; color: var(--ink);
+  }
+  .draw-state {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .12em;
+    color: var(--ink-2); background: var(--paper-2);
+    border: 1px solid var(--line-soft);
+    padding: 3px 8px; display: inline-block;
+  }
+  .draw-state.funded { color: var(--ok); border-color: var(--ok); }
+  .draw-amount {
+    font-family: var(--f-mono); font-size: 13px; font-weight: 600;
+    color: var(--ink); text-align: right;
+  }
+  .draw-when {
+    font-family: var(--f-mono); font-size: 11px;
+    color: var(--ink-2); text-align: right;
+  }
+
+  /* View entrance */
+  .view > * {
+    opacity: 0; transform: translateY(8px);
+    animation: enter .45s cubic-bezier(.4,0,.2,1) forwards;
+  }
+  .view > *:nth-child(1) { animation-delay: 0ms; }
+  .view > *:nth-child(2) { animation-delay: 60ms; }
+  .view > *:nth-child(3) { animation-delay: 120ms; }
+  .view > *:nth-child(4) { animation-delay: 180ms; }
+  .view > *:nth-child(5) { animation-delay: 240ms; }
+  @keyframes enter { to { opacity: 1; transform: none; } }
+
+  /* Sortable headers */
+  .loans-table thead th { cursor: pointer; user-select: none; }
+  .loans-table thead th:hover { color: var(--ink); }
+  .loans-table thead th .sort-arrow {
+    display: inline-block; width: 12px; font-family: var(--f-mono);
+    font-size: 10px; color: var(--red); margin-left: 2px;
+  }
+
+  /* Draw card (drawer) */
+  .draw-card {
+    padding: 14px 0 18px;
+    border-bottom: 1px solid var(--line-faint);
+  }
+  .draw-card:last-child { border-bottom: none; }
+  .draw-card-head {
+    display: grid; grid-template-columns: 50px 1fr auto auto;
+    gap: 14px; align-items: center; margin-bottom: 12px;
+  }
+  /* Progress stepper */
+  .prog-stepper {
+    display: flex; gap: 0; margin: 6px 0 14px;
+    padding: 0; list-style: none;
+  }
+  .prog-step {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    position: relative;
+    font-family: var(--f-mono); font-size: 9px; line-height: 1.15;
+    text-transform: uppercase; letter-spacing: .06em;
+    color: var(--ink-2); text-align: center;
+  }
+  .prog-step .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--line); background: var(--paper);
+    margin-bottom: 6px; position: relative; z-index: 1;
+    transition: all .2s ease;
+  }
+  .prog-step.done .dot { background: var(--ink); border-color: var(--ink); }
+  .prog-step.current .dot {
+    background: var(--red); border-color: var(--red);
+    box-shadow: 0 0 0 4px rgba(189,29,44,.18);
+  }
+  .prog-step.current { color: var(--ink); font-weight: 700; }
+  .prog-step + .prog-step::before {
+    content: ''; position: absolute; left: -50%; top: 6px;
+    width: 100%; height: 2px; background: var(--line); z-index: 0;
+  }
+  .prog-step.done + .prog-step::before { background: var(--ink); }
+  /* Progress controls */
+  .prog-controls {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 8px;
+  }
+  .prog-controls .label {
+    flex: 1; font-family: var(--f-mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .12em;
+    color: var(--ink); font-weight: 600;
+  }
+  .btn.xs { padding: 5px 11px; font-size: 11px; }
+  .btn.xs[disabled] { opacity: .35; cursor: not-allowed; }
+  /* History */
+  .prog-history { font-size: 11.5px; color: var(--ink-2); }
+  .prog-history summary {
+    cursor: pointer; font-family: var(--f-mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--ink-2);
+    padding: 4px 0;
+  }
+  .prog-history summary:hover { color: var(--ink); }
+  .prog-history ul {
+    margin: 6px 0 0; padding-left: 16px;
+    list-style: none; border-left: 1px solid var(--line);
+  }
+  .prog-history li {
+    padding: 3px 0 3px 10px; font-family: var(--f-mono); font-size: 10.5px;
+    color: var(--ink-2);
+  }
+  .prog-history li .h-when { color: var(--ink); }
+  .prog-history li .h-src  { color: var(--red); font-weight: 600; }
+
+  /* Drawer controls (total draws + add draw) */
+  .drawer-controls {
+    margin-top: 16px; padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .dc-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .dc-label {
+    font-family: var(--f-mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--ink-2);
+  }
+  .dc-hint {
+    font-family: var(--f-mono); font-size: 11px; color: var(--red);
+    font-weight: 600; text-transform: uppercase; letter-spacing: .1em;
+  }
+
+  /* Cross-references (other sheets in the workbook that mention this CF#) */
+  .xref-section {
+    margin-top: 24px; padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+  .xref-section h3 {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: var(--ink-2); margin: 0 0 10px;
+  }
+  .xref-sheet {
+    margin-bottom: 8px;
+    border: 1px solid var(--line-soft); background: var(--paper-2);
+  }
+  .xref-sheet summary {
+    cursor: pointer; padding: 8px 12px;
+    font-family: var(--f-mono); font-size: 12px;
+    background: var(--paper); border-bottom: 1px solid transparent;
+    list-style: none;
+  }
+  .xref-sheet[open] summary { border-bottom-color: var(--line-soft); }
+  .xref-sheet summary::-webkit-details-marker { display: none; }
+  .xref-sheet summary::before {
+    content: '▸'; display: inline-block; margin-right: 8px;
+    color: var(--ink-2); transition: transform .15s;
+  }
+  .xref-sheet[open] summary::before { transform: rotate(90deg); }
+  .xref-count {
+    font-size: 10.5px; color: var(--ink-2); font-weight: 400;
+    margin-left: 6px;
+  }
+  .xref-row {
+    padding: 8px 12px;
+    border-bottom: 1px dashed var(--line-faint);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 6px 14px;
+  }
+  .xref-row:last-child { border-bottom: none; }
+  .xref-field { font-size: 11.5px; display: flex; flex-direction: column; gap: 1px; }
+  .xref-k {
+    font-family: var(--f-mono); font-size: 9.5px; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  .xref-v {
+    font-family: var(--f-body); color: var(--ink);
+    word-break: break-word;
+  }
+
+  /* Debug HUD: pulse the DBG button red when an error has been captured */
+  #dbg-open.has-error {
+    color: var(--red); opacity: 1; font-weight: 700;
+    animation: dbgPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes dbgPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 22px; left: 50%;
+    transform: translateX(-50%) translateY(40px);
+    background: var(--ink); color: var(--white);
+    padding: 11px 20px;
+    font-family: var(--f-mono);
+    font-size: 11.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .14em;
+    border-left: 3px solid var(--red);
+    opacity: 0; transition: all var(--t-med);
+    z-index: 200; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-left-color: var(--ok, #1b7a3e); }
+
+  .view[hidden] { display: none; }
+  .updated-flash { animation: flash .8s ease-out; }
+  @keyframes flash {
+    0%   { background: var(--red-soft); }
+    100% { background: transparent; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TITLEBAR -->
+<div class="titlebar" id="titlebar">
+  <div class="tb-brand">
+    <span class="logo-step"><span></span><span></span><span></span><span></span><span></span></span>
+    Draw&nbsp;Manager
+  </div>
+  <div class="tb-spacer"></div>
+  <div class="tb-meta sync never" id="tb-sync" title="Click to sync now">
+    <span class="dot"></span><span id="tb-sync-text">NOT SYNCED</span>
+  </div>
+  <div class="tb-meta" id="dbg-open" style="cursor:pointer; opacity:.55;" title="Debug HUD (Ctrl+Shift+D)">DBG</div>
+  <div class="tb-meta" id="tb-clock">—</div>
+  <div class="tb-controls">
+    <button class="winbtn" id="win-min" title="Minimize">
+      <svg width="11" height="11" viewBox="0 0 11 11"><line x1="1" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+    <button class="winbtn" id="win-max" title="Maximize">
+      <svg width="11" height="11" viewBox="0 0 11 11"><rect x="1.5" y="1.5" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>
+    </button>
+    <button class="winbtn close" id="win-close" title="Close">
+      <svg width="11" height="11" viewBox="0 0 11 11"><line x1="1.5" y1="1.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.2"/><line x1="9.5" y1="1.5" x2="1.5" y2="9.5" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- DEBUG HUD — hidden by default; open via DBG button in titlebar or Ctrl+Shift+D -->
+<div id="dbg-hud" style="display:none; position:fixed; bottom:12px; right:12px; z-index:99999;
+  background:rgba(18,22,28,.96); color:#d4dbe3; font:11px/1.45 ui-monospace,Consolas,monospace;
+  padding:10px 12px; border:1px solid #3a4150; border-radius:6px;
+  min-width:320px; max-width:460px; max-height:60vh; overflow:auto;
+  box-shadow:0 10px 32px rgba(0,0,0,.55);">
+  <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+    <span style="font-weight:600; color:#ffb86b;">debug HUD</span>
+    <span style="color:#6f7785;">Ctrl+Shift+D to hide</span>
+  </div>
+  <pre id="dbg-state" style="margin:0 0 8px; white-space:pre-wrap; color:#a9d4ff;"></pre>
+  <div style="display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
+    <button id="dbg-refresh" style="font:11px monospace; padding:3px 8px; cursor:pointer;">refresh</button>
+    <button id="dbg-trydrag" style="font:11px monospace; padding:3px 8px; cursor:pointer;">try drag</button>
+    <button id="dbg-pyerr"   style="font:11px monospace; padding:3px 8px; cursor:pointer;">py errors</button>
+    <button id="dbg-clear"   style="font:11px monospace; padding:3px 8px; cursor:pointer;">clear</button>
+  </div>
+  <pre id="dbg-log" style="margin:0; white-space:pre-wrap; font-size:10.5px; color:#cfd6df;"></pre>
+</div>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="side-head">
+      <div class="label">Sheet 01 / 04</div>
+      <div class="side-brand">
+        <div>
+          <div class="num">DRAW</div>
+          <div class="sub" id="side-version">manager · v0.3</div>
+        </div>
+      </div>
+    </div>
+    <div class="nav-label">Workspace</div>
+    <nav class="nav" id="nav">
+      <button data-view="home"     aria-current="true">Home</button>
+      <button data-view="pipeline">Pipeline <span class="badge" id="nav-pipeline">0</span></button>
+      <button data-view="loans">Loans <span class="badge" id="nav-loans">0</span></button>
+      <button data-view="scripts">Scripts</button>
+      <button data-view="settings">Settings</button>
+    </nav>
+    <div class="side-foot">
+      <div class="row"><span>Operator</span><span>LQ</span></div>
+      <div class="row"><span><span class="pulse"></span>Local</span><span>READY</span></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="topbar">
+      <div class="crumb" id="crumb"><b>HOME</b> · DASHBOARD</div>
+      <div class="topbar-right" id="status">SYS · OK</div>
+    </div>
+
+    <!-- HOME -->
+    <section class="view" id="view-home">
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Operations</h1>
+          <p class="view-sub">What needs attention today, and the state of the pipeline.</p>
+        </div>
+        <div class="view-aside">
+          Session · #LQ-0001<br>
+          Build · v0.3<br>
+          Status · <b>ACTIVE</b>
+        </div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-label">Loans</div>
+          <div class="stat-value" id="stat-loans">—</div>
+          <div class="stat-trend muted" id="stat-loans-trend">awaiting sync</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">In flight</div>
+          <div class="stat-value" id="stat-flight">—</div>
+          <div class="stat-trend muted">draws in progress</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Stale</div>
+          <div class="stat-value" id="stat-stale">—</div>
+          <div class="stat-trend muted" id="stat-stale-trend">past threshold</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Funded · total</div>
+          <div class="stat-value" id="stat-funded">—</div>
+          <div class="stat-trend muted">disbursed</div>
+        </div>
+      </div>
+
+      <h2 class="section-title">Inbox <small>oldest first · stale on top</small></h2>
+      <div class="section-rule"></div>
+      <div id="inbox-host">
+        <div class="empty">Configure Google Sheets sync in Settings → Connections</div>
+      </div>
+    </section>
+
+    <!-- PIPELINE -->
+    <section class="view" id="view-pipeline" hidden>
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Pipeline</h1>
+          <p class="view-sub">Manual progress per draw. Drag cards between columns to advance/reverse; everything autosaves.</p>
+        </div>
+        <div class="view-aside" id="pipeline-aside">—<br>—<br>—</div>
+      </div>
+      <div class="kanban-toolbar">
+        <span>Sort by</span>
+        <select id="kb-sort">
+          <option value="cf_number">CF#</option>
+          <option value="days_in_state">Days in state</option>
+          <option value="approved_amount">Amount</option>
+          <option value="borrower_name">Borrower</option>
+          <option value="address">Address</option>
+        </select>
+        <button id="kb-sort-dir" title="Toggle ascending / descending">↑ asc</button>
+        <span style="margin-left:auto" id="kanban-bar">Drag a card between columns to update its progress</span>
+      </div>
+      <div class="kanban" id="kanban">
+        <div class="empty" style="flex:1">No data · configure sync in Settings</div>
+      </div>
+    </section>
+
+    <!-- LOANS -->
+    <section class="view" id="view-loans" hidden>
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Loans</h1>
+          <p class="view-sub">All loans imported from the sheet. Click a row for the full draw history.</p>
+        </div>
+        <div class="view-aside" id="loans-aside">—</div>
+      </div>
+      <div class="toolbar">
+        <div class="search"><input type="text" id="loan-search" placeholder="Search CF#, borrower, or address…"></div>
+      </div>
+      <div id="loans-host">
+        <div class="empty">No data · configure sync in Settings</div>
+      </div>
+    </section>
+
+    <!-- SCRIPTS -->
+    <section class="view" id="view-scripts" hidden>
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Scripts</h1>
+          <p class="view-sub">Automations. Click a card to run; click the gear in the panel to edit defaults for that script.</p>
+        </div>
+        <div class="view-aside">1 active</div>
+      </div>
+      <div class="script-grid" id="scripts-grid"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings" hidden>
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Settings</h1>
+          <p class="view-sub">Connections, system credentials, and execution paths. Persisted to settings.json.</p>
+        </div>
+        <div class="view-aside">v0.3<br>local store</div>
+      </div>
+
+      <!-- CONNECTIONS -->
+      <h2 class="section-title">Connections <small>integrations</small></h2>
+      <div class="section-rule"></div>
+      <div class="settings-block">
+
+        <!-- Google Sheets -->
+        <div class="settings-grid">
+          <div class="key">Sheet source<small>Point at a local Excel file (.xlsx) or a Google service-account .json. Local files skip the Spreadsheet&nbsp;ID; Google needs both.</small></div>
+          <div class="field" style="gap: 14px;">
+            <div class="row-inputs">
+              <input type="text" id="gs-credentials-path" placeholder="Path to .xlsx file or service-account JSON…">
+              <button class="btn ghost small" id="gs-browse">Browse…</button>
+            </div>
+            <input type="text" id="gs-spreadsheet-id" placeholder="Spreadsheet ID (from URL) — only needed for Google Sheets">
+            <div class="row-inputs">
+              <input type="text" id="gs-sheet-name" placeholder="Sheet name (e.g. Draw)">
+              <input type="text" id="gs-range" placeholder="Range (e.g. A:DZ) — only for Google" style="max-width:200px;">
+            </div>
+            <div class="row-inputs" style="margin-top: 4px;">
+              <label class="switch" style="margin-right:auto;">
+                <input type="checkbox" id="gs-auto-sync">
+                <span class="track"></span>
+                <span class="label">Auto-sync</span>
+              </label>
+              <span style="font-family:var(--f-mono); font-size:11px; color:var(--ink-2); letter-spacing:.14em; text-transform:uppercase;">Every</span>
+              <select id="gs-interval" style="max-width:120px;">
+                <option value="5">5 min</option>
+                <option value="15" selected>15 min</option>
+                <option value="30">30 min</option>
+                <option value="60">60 min</option>
+              </select>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn primary small" id="gs-sync-now">Sync now</button>
+              <button class="btn ghost small" id="gs-test">Test connection</button>
+            </div>
+            <div id="gs-test-result"></div>
+          </div>
+        </div>
+
+        <!-- Google Sheets WRITE-BACK -->
+        <div class="settings-grid">
+          <div class="key">Write back to sheet<small>Let the app push updates to the Google Sheet (e.g. flip TRUE on inspection_ordered when a draw progresses). Requires the service account to have <b>Editor</b> permission on the spreadsheet — share the sheet with the service account's email address (found in the .json under <code>client_email</code>).</small></div>
+          <div class="field" style="gap: 12px;">
+            <label class="switch">
+              <input type="checkbox" id="gs-write-enabled">
+              <span class="track"></span>
+              <span class="label">Enable write access</span>
+            </label>
+            <label class="switch">
+              <input type="checkbox" id="gs-auto-write">
+              <span class="track"></span>
+              <span class="label">Auto-write when I change a draw's progress</span>
+            </label>
+            <div style="display:flex; gap:8px;">
+              <button class="btn ghost small" id="gs-test-write">Test write access</button>
+            </div>
+            <div id="gs-write-result"></div>
+          </div>
+        </div>
+
+        <!-- Baseline -->
+        <div class="settings-grid">
+          <div class="key">Baseline<small>For loan + contact lookups. Will replace Casa Finance scraping.</small></div>
+          <div class="field"><input type="password" id="bl-api-key" placeholder="bln_••••••••••••••••"></div>
+        </div>
+
+        <!-- ProxyPics -->
+        <div class="settings-grid">
+          <div class="key">ProxyPics<small>Uses a persistent browser profile; no key needed.</small></div>
+          <div class="field"><input type="text" value="Session managed by browser profile" disabled></div>
+        </div>
+
+      </div>
+
+      <!-- PREFERENCES -->
+      <h2 class="section-title">Preferences <small>appearance</small></h2>
+      <div class="section-rule"></div>
+      <div class="settings-block">
+        <div class="settings-grid">
+          <div class="key">Theme<small>Blueprint is the original drafting-paper look. Light is a clean white interface.</small></div>
+          <div class="field">
+            <select id="pref-theme" style="max-width: 220px;">
+              <option value="blueprint">Blueprint (default)</option>
+              <option value="light">Light</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- MANUAL IMPORT (fallback) -->
+      <h2 class="section-title">Manual import <small>fallback · paste TSV/CSV</small></h2>
+      <div class="section-rule"></div>
+      <div class="settings-block">
+        <div class="settings-grid">
+          <div class="key">Paste sheet<small>Backup path when API sync isn't available. Same parser, same upserts.</small></div>
+          <div class="field">
+            <textarea id="set-sheet" placeholder="Paste TSV or CSV here…"></textarea>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button class="btn ghost small" id="btn-import">Import paste</button>
+              <button class="btn ghost small" id="btn-clear-paste">Clear</button>
+            </div>
+            <div id="import-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SYSTEM -->
+      <h2 class="section-title">System <small>paths</small></h2>
+      <div class="section-rule"></div>
+      <div class="settings-block">
+        <div class="settings-grid">
+          <div class="key">Script directory<small>Where draw_request.py lives.</small></div>
+          <div class="field"><input type="text" id="sys-script-dir"></div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top: 22px;">
+        <button class="btn primary" id="btn-save">Save settings</button>
+        <button class="btn ghost"   id="btn-reload">Reload from disk</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- RUN OVERLAY -->
+<div class="overlay" id="overlay">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-eyebrow" id="panel-eyebrow">Script · SCR-001</div>
+        <div class="panel-title" id="panel-title">Submit Draw Request</div>
+      </div>
+      <div class="panel-head-right">
+        <button class="panel-icon" id="panel-gear" title="Script settings" aria-label="Settings">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+            <circle cx="8" cy="8" r="2.2"/>
+            <path d="M8 1.5v2 M8 12.5v2 M14.5 8h-2 M3.5 8h-2 M12.6 3.4l-1.4 1.4 M4.8 11.2l-1.4 1.4 M12.6 12.6l-1.4-1.4 M4.8 4.8l-1.4-1.4"/>
+          </svg>
+        </button>
+        <button class="panel-icon close" id="panel-close" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14"><line x1="2" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="1.4"/><line x1="12" y1="2" x2="2" y2="12" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="panel-body" id="panel-body"></div>
+    <div class="panel-foot">
+      <div class="panel-foot-note" id="panel-note">Idle</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn ghost" id="panel-cancel">Cancel</button>
+        <button class="btn primary" id="panel-run">Run</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- LOAN DRAWER -->
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div>
+      <div class="drawer-eyebrow" id="drawer-eyebrow">Loan</div>
+      <div class="drawer-title" id="drawer-title">—</div>
+      <div class="drawer-sub" id="drawer-sub">—</div>
+    </div>
+    <button class="panel-icon close" id="drawer-close" aria-label="Close">
+      <svg width="14" height="14" viewBox="0 0 14 14"><line x1="2" y1="2" x2="12" y2="12" stroke="currentColor" stroke-width="1.4"/><line x1="12" y1="2" x2="2" y2="12" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===== state ===== */
+let API_READY      = false;
+let CURRENT_VIEW   = 'home';
+let LAST_SYNC_COUNTER = 0;
+let SETTINGS = null;
+
+const stateLabels = {
+  pending: 'Pending', requested: 'Requested',
+  inspection_ordered: 'Inspection Ordered',
+  appraisal_paid: 'Appraisal Paid',
+  appraisal_received: 'Appraisal Received',
+  email_sent: 'Email Sent', approved: 'Approved',
+  fci_updated: 'FCI Updated', funded: 'Funded',
+};
+
+window.addEventListener('pywebviewready', async () => {
+  API_READY = true;
+  await loadSettings();
+  await refreshAll();
+  startStatusPoll();
+});
+/* api() returns a Proxy around window.pywebview.api so that every method
+   call is intercepted; any { error } response or thrown exception is
+   forwarded to the debug HUD and pulses the DBG button red. */
+let _apiRaw = null, _apiProxy = null;
+function api() {
+  const raw = window.pywebview && window.pywebview.api;
+  if (!raw) return null;
+  if (raw === _apiRaw) return _apiProxy;
+  _apiRaw = raw;
+  _apiProxy = new Proxy(raw, {
+    get(target, prop) {
+      const v = target[prop];
+      if (typeof v !== 'function') return v;
+      return async (...args) => {
+        try {
+          const r = await v.apply(target, args);
+          if (r && typeof r === 'object' && 'error' in r && r.error) {
+            errCapture(`api.${String(prop)} → ${r.error}`);
+          }
+          return r;
+        } catch (e) {
+          errCapture(`api.${String(prop)} THREW: ${e && e.message || e}`);
+          throw e;
+        }
+      };
+    }
+  });
+  return _apiProxy;
+}
+function errCapture(msg) {
+  // dbg is defined below; guard so this works even during early bootstrap.
+  if (typeof dbg !== 'undefined' && dbg && dbg.note) dbg.note(msg);
+  const btn = document.getElementById('dbg-open');
+  if (btn) btn.classList.add('has-error');
+}
+window.addEventListener('error', e => {
+  errCapture(`window.error: ${e.message || e.error} @ ${e.filename || '?'}:${e.lineno || '?'}`);
+});
+window.addEventListener('unhandledrejection', e => {
+  errCapture(`unhandled rejection: ${(e.reason && e.reason.message) || e.reason}`);
+});
+
+/* ===== window controls ===== */
+document.getElementById('win-min').onclick   = () => api()?.win_minimize();
+document.getElementById('win-max').onclick   = () => api()?.win_toggle_max();
+document.getElementById('win-close').onclick = () => api()?.win_close();
+
+/* ===== debug HUD (hidden by default; open via DBG button or Ctrl+Shift+D) ===== */
+const dbg = (() => {
+  const hud     = document.getElementById('dbg-hud');
+  const stateEl = document.getElementById('dbg-state');
+  const logEl   = document.getElementById('dbg-log');
+  const buf = [];                                   // in-memory log, capped at 100
+
+  const log = msg => {
+    buf.unshift(`[${new Date().toLocaleTimeString('en-GB')}] ${msg}`);
+    if (buf.length > 100) buf.length = 100;
+    if (hud.style.display !== 'none') logEl.textContent = buf.join('\n');
+  };
+  // Same as log, but flag the DBG button red so the user knows something went wrong
+  const note = msg => {
+    log(`⚠ ${msg}`);
+    const btn = document.getElementById('dbg-open');
+    if (btn) btn.classList.add('has-error');
+  };
+  const refresh = async () => {
+    const a = api();
+    try { stateEl.textContent = a ? JSON.stringify(await a.win_debug_info(), null, 2) : '(no api)'; }
+    catch (e) { stateEl.textContent = 'err: ' + e; }
+  };
+  const tryDrag = async (tag = 'manual') => {
+    const a = api();
+    if (!a) return log(`${tag}: NO API`);
+    try { log(`${tag}: → ${JSON.stringify(await a.win_start_drag())}`); }
+    catch (e) { log(`${tag}: EXCEPTION ${e}`); }
+  };
+  const fetchPyErrors = async () => {
+    const a = api();
+    if (!a) return log('NO API');
+    try {
+      const errs = await a.get_recent_errors();
+      if (!errs || !errs.length) return log('no python-side errors');
+      log(`== ${errs.length} python errors ==`);
+      errs.slice().reverse().forEach(e => log(`  PY ${e.where}: ${e.type}: ${e.msg}`));
+    } catch (e) { log('fetchPyErrors EXCEPTION ' + e); }
+  };
+  const toggle = () => {
+    const open = hud.style.display === 'none';
+    hud.style.display = open ? 'block' : 'none';
+    if (open) {
+      refresh();
+      logEl.textContent = buf.join('\n');
+      document.getElementById('dbg-open').classList.remove('has-error');
+    }
+  };
+
+  document.getElementById('dbg-refresh').onclick = refresh;
+  document.getElementById('dbg-trydrag').onclick = () => tryDrag('button');
+  document.getElementById('dbg-pyerr').onclick   = fetchPyErrors;
+  document.getElementById('dbg-clear').onclick   = () => { buf.length = 0; logEl.textContent = ''; };
+  document.getElementById('dbg-open').onclick    = toggle;
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyD') toggle();
+  });
+
+  return { log, note, refresh, tryDrag, fetchPyErrors };
+})();
+
+/* ===== window drag =====
+   Hand the drag to Win32 via WM_NCLBUTTONDOWN/HTCAPTION on Python side. */
+(() => {
+  const titlebar = document.getElementById('titlebar');
+  if (!titlebar) return;
+  const noDrag = 'button, .tb-controls, .tb-meta.sync, #dbg-open';
+
+  titlebar.addEventListener('mousedown', e => {
+    if (e.button !== 0 || e.target.closest(noDrag)) return;
+    dbg.tryDrag('titlebar');
+  });
+  titlebar.addEventListener('dblclick', e => {
+    if (e.target.closest(noDrag)) return;
+    api()?.win_toggle_max();
+  });
+})();
+
+/* ===== Nav ===== */
+const views = {
+  home:     document.getElementById('view-home'),
+  pipeline: document.getElementById('view-pipeline'),
+  loans:    document.getElementById('view-loans'),
+  scripts:  document.getElementById('view-scripts'),
+  settings: document.getElementById('view-settings'),
+};
+const crumb = document.getElementById('crumb');
+document.querySelectorAll('#nav button').forEach(b => {
+  b.onclick = () => showView(b.dataset.view);
+});
+function showView(name) {
+  CURRENT_VIEW = name;
+  Object.values(views).forEach(v => v.hidden = true);
+  views[name].hidden = false;
+  document.querySelectorAll('#nav button').forEach(b => {
+    b.setAttribute('aria-current', b.dataset.view === name);
+  });
+  const subs = {
+    home: 'INBOX', pipeline: 'KANBAN', loans: 'PORTFOLIO',
+    scripts: 'AUTOMATIONS', settings: 'CONFIGURATION'
+  };
+  crumb.innerHTML = `<b>${name.toUpperCase()}</b> · ${subs[name]}`;
+  views[name].querySelectorAll(':scope > *').forEach(el => {
+    el.style.animation = 'none'; el.offsetHeight; el.style.animation = '';
+  });
+  if (name === 'pipeline') refreshKanban();
+  if (name === 'loans')    refreshLoans();
+  if (name === 'home')     refreshHome();
+  if (name === 'settings') refreshSettingsUI();
+}
+
+/* ===== formatters ===== */
+const fmt$ = v => (v == null ? '—' : '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }));
+const fmt$_short = v => {
+  if (v == null) return '—';
+  v = Number(v);
+  if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return '$' + (v/1e3).toFixed(0) + 'k';
+  return '$' + v;
+};
+const escapeHtml = s => (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function fmtAgo(sec) {
+  if (sec == null) return 'NEVER';
+  if (sec < 60)    return `${sec}s AGO`;
+  if (sec < 3600)  return `${Math.floor(sec/60)}m AGO`;
+  if (sec < 86400) return `${Math.floor(sec/3600)}h AGO`;
+  return `${Math.floor(sec/86400)}d AGO`;
+}
+
+/* ===== Refresh orchestration ===== */
+async function refreshAll() {
+  await Promise.all([refreshHome(), refreshNavBadges()]);
+}
+async function refreshNavBadges() {
+  const a = api(); if (!a) return;
+  const s = await a.get_summary();
+  document.getElementById('nav-pipeline').textContent = s.in_flight;
+  document.getElementById('nav-loans').textContent    = s.loans;
+}
+
+/* ===== Sync status poll + silent refresh ===== */
+function startStatusPoll() {
+  setInterval(updateSyncBadge, 1000);  // refresh "updated Xs ago" text
+  setInterval(pollSyncCounter, 3000);  // check for new data
+  updateVersionBadge();                // show version immediately
+  setInterval(updateVersionBadge, 2000);
+}
+async function updateVersionBadge() {
+  const a = api(); if (!a) return;
+  const el = document.getElementById('side-version');
+  if (!el) return;
+  try {
+    const v = await a.app_version();
+    const s = await a.update_status();
+    let label = `manager · v${v}`, title = `Version ${v}`;
+    switch (s && s.state) {
+      case 'checking':
+        title = 'Checking for updates…'; break;
+      case 'updating':
+        label = `manager · v${v} · updating…`;
+        title = s.detail ? `Updating: ${s.detail}` : 'Updating…';
+        break;
+      case 'up_to_date':
+        title = 'Up to date'; break;
+      case 'error':
+        title = `Update check failed: ${s.detail || 'unknown'}`; break;
+    }
+    el.textContent = label;
+    el.title = title;
+  } catch (e) { /* leave previous text */ }
+}
+async function updateSyncBadge() {
+  const a = api(); if (!a) return;
+  const s = await a.get_sync_status();
+  const el = document.getElementById('tb-sync');
+  const txt = document.getElementById('tb-sync-text');
+  el.classList.remove('never', 'err');
+  if (s.last_error) {
+    el.classList.add('err');
+    txt.textContent = 'SYNC ERROR';
+    el.title = s.last_error;
+  } else if (s.last_sync_at == null) {
+    el.classList.add('never');
+    txt.textContent = s.configured ? 'NOT SYNCED' : 'NOT CONFIGURED';
+    el.title = s.configured ? 'Click to sync now' : 'Configure in Settings';
+  } else {
+    txt.textContent = `UPDATED ${fmtAgo(s.seconds_since)}`;
+    el.title = `Last synced ${s.last_sync_at}. Click to sync now.`;
+  }
+}
+async function pollSyncCounter() {
+  const a = api(); if (!a) return;
+  const s = await a.get_sync_status();
+  if (s.counter !== LAST_SYNC_COUNTER) {
+    LAST_SYNC_COUNTER = s.counter;
+    silentRefresh();
+  }
+}
+async function silentRefresh() {
+  await refreshNavBadges();
+  if (CURRENT_VIEW === 'home')     await refreshHome();
+  if (CURRENT_VIEW === 'pipeline') await refreshKanban();
+  if (CURRENT_VIEW === 'loans')    await refreshLoans();
+  // gentle visual hint: flash the topbar badge
+  const el = document.getElementById('tb-sync');
+  el.classList.remove('updated-flash'); void el.offsetWidth;
+  el.classList.add('updated-flash');
+}
+document.getElementById('tb-sync').onclick = async () => {
+  const a = api(); if (!a) return;
+  toast('Syncing…');
+  const r = await a.gsheet_sync_now();
+  if (r.error) toast('Sync failed: ' + r.error);
+  else { toast('Sync complete'); silentRefresh(); }
+};
+
+/* ===== HOME ===== */
+async function refreshHome() {
+  const a = api(); if (!a) return;
+  const s = await a.get_summary();
+  document.getElementById('stat-loans').textContent  = s.loans;
+  document.getElementById('stat-flight').textContent = s.in_flight;
+  document.getElementById('stat-stale').textContent  = s.stale;
+  document.getElementById('stat-funded').innerHTML   =
+    `${fmt$_short(s.funded_amount)}<small>/${s.funded_count}</small>`;
+  const stTrend = document.getElementById('stat-stale-trend');
+  stTrend.textContent = s.stale === 0 ? 'all on schedule' : `${s.stale} past threshold`;
+  stTrend.className = 'stat-trend ' + (s.stale === 0 ? '' : 'warn');
+  document.getElementById('stat-loans-trend').textContent =
+    s.loans === 0 ? 'awaiting sync' : 'in portfolio';
+  await refreshInbox();
+}
+async function refreshInbox() {
+  const a = api(); if (!a) return;
+  const items = await a.get_inbox(12);
+  const host = document.getElementById('inbox-host');
+  if (!items || items.length === 0) {
+    host.innerHTML = `<div class="empty">No active draws · all caught up or nothing imported yet</div>`;
+    return;
+  }
+  items.sort((a, b) => (b.stale - a.stale));
+  host.innerHTML = `<div class="inbox">` + items.map(d => `
+    <div class="inbox-item ${d.stale ? 'stale' : ''}" data-loan-id="${d.loan_id}">
+      <div class="inbox-cf">${escapeHtml(d.cf_number)}</div>
+      <div class="inbox-state">${escapeHtml(d.state_label)}</div>
+      <div class="inbox-addr">
+        ${escapeHtml(d.address || '—')}
+        <small>${escapeHtml(d.borrower_name || '')}</small>
+      </div>
+      <div class="inbox-draw">DRAW #${d.draw_number}</div>
+      <div class="inbox-days ${d.stale ? 'stale' : ''}">${d.days_in_state}d</div>
+    </div>
+  `).join('') + `</div>`;
+  host.querySelectorAll('.inbox-item').forEach(el => {
+    el.onclick = () => openLoanDrawer(Number(el.dataset.loanId));
+  });
+}
+
+/* ===== PIPELINE / KANBAN (progress-state, drag+drop, sortable) ===== */
+let _kbSortKey = 'cf_number';
+let _kbSortDir = 'asc';
+const _kbNumKeys = new Set(['days_in_state', 'approved_amount', 'requested_amount']);
+document.getElementById('kb-sort').onchange = e => { _kbSortKey = e.target.value; refreshKanban(); };
+document.getElementById('kb-sort-dir').onclick = () => {
+  _kbSortDir = _kbSortDir === 'asc' ? 'desc' : 'asc';
+  document.getElementById('kb-sort-dir').textContent = _kbSortDir === 'asc' ? '↑ asc' : '↓ desc';
+  refreshKanban();
+};
+
+function _kbSortCards(cards) {
+  const isNum = _kbNumKeys.has(_kbSortKey);
+  return [...cards].sort((a, b) => {
+    let av = a[_kbSortKey], bv = b[_kbSortKey];
+    if (av == null) av = isNum ? -Infinity : '';
+    if (bv == null) bv = isNum ? -Infinity : '';
+    const cmp = isNum ? (av - bv)
+      : String(av).localeCompare(String(bv), undefined, { numeric: true });
+    return _kbSortDir === 'asc' ? cmp : -cmp;
+  });
+}
+
+async function refreshKanban() {
+  const a = api(); if (!a) return;
+  const data = await a.get_progress_kanban();
+  const host = document.getElementById('kanban');
+  const total = data.states.reduce((n, s) => n + s.cards.length, 0);
+  document.getElementById('pipeline-aside').innerHTML =
+    `${total} draws<br>${data.states.length} states<br>drag → autosave`;
+
+  if (total === 0) {
+    host.innerHTML = `<div class="empty" style="flex:1">No draws yet · sync to populate</div>`;
+    return;
+  }
+  host.innerHTML = data.states.map(s => `
+    <div class="col" data-state="${s.key}">
+      <div class="col-head">
+        <span>${escapeHtml(s.label)}</span>
+        <span class="count">${s.cards.length}</span>
+      </div>
+      <div class="col-body" data-state="${s.key}">
+        ${_kbSortCards(s.cards).map(c => `
+          <article class="card" draggable="true"
+                   data-draw-id="${c.id}" data-loan-id="${c.loan_id}"
+                   data-state="${c.progress_state}">
+            <div class="card-head">
+              <span class="card-cf">${escapeHtml(c.cf_number)}</span>
+              <span class="card-draw">DRAW ${c.draw_number}</span>
+            </div>
+            <div class="card-addr">${escapeHtml(c.address || '—')}</div>
+            <div class="card-name">${escapeHtml(c.borrower_name || '')}</div>
+            <div class="card-foot">
+              <span class="amount">${fmt$_short(c.approved_amount || c.requested_amount)}</span>
+              <span class="days">${c.days_in_state}d</span>
+            </div>
+          </article>`).join('')}
+        ${s.cards.length === 0 ? '<div style="font-family:var(--f-mono); font-size:11px; color:var(--ink-3); padding:8px; text-align:center;">empty</div>' : ''}
+      </div>
+    </div>
+  `).join('');
+
+  // Click a card → open the loan drawer.
+  host.querySelectorAll('.card').forEach(el => {
+    el.addEventListener('click', () => {
+      // Don't fire click after a drag.
+      if (el.classList.contains('dragging')) return;
+      openLoanDrawer(Number(el.dataset.loanId));
+    });
+  });
+
+  // HTML5 drag-and-drop wiring.
+  host.querySelectorAll('.card').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/draw-id', el.dataset.drawId);
+      e.dataTransfer.setData('text/from-state', el.dataset.state);
+      e.dataTransfer.effectAllowed = 'move';
+      el.classList.add('dragging');
+    });
+    el.addEventListener('dragend', () => el.classList.remove('dragging'));
+  });
+  host.querySelectorAll('.col').forEach(col => {
+    col.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      col.classList.add('drop-target');
+    });
+    col.addEventListener('dragleave', () => col.classList.remove('drop-target'));
+    col.addEventListener('drop', async e => {
+      e.preventDefault();
+      col.classList.remove('drop-target');
+      const drawId = Number(e.dataTransfer.getData('text/draw-id'));
+      const from   = e.dataTransfer.getData('text/from-state');
+      const to     = col.dataset.state;
+      if (!drawId || !to || from === to) return;
+      await progressAction(drawId, to);
+      refreshKanban();
+    });
+  });
+}
+
+/* ===== LOANS ===== */
+let _allLoans = [];
+let _loansFilter = '';
+let _sortKey = 'cf_number';
+let _sortDir = 'asc';
+const _sortCols = [
+  { key: 'cf_number',     label: 'CF#',         align: 'left',  type: 'string' },
+  { key: 'borrower_name', label: 'Borrower',    align: 'left',  type: 'string' },
+  { key: 'address',       label: 'Address',     align: 'left',  type: 'string' },
+  { key: 'budget_amount', label: 'Budget',      align: 'right', type: 'number' },
+  { key: 'drawn_amount',  label: 'Drawn',       align: 'right', type: 'number' },
+  { key: 'draws_count',   label: 'Draws',       align: 'right', type: 'number' },
+  { key: 'last_activity', label: 'Last Act',    align: 'right', type: 'string' },
+];
+function setSort(key) {
+  if (_sortKey === key) _sortDir = _sortDir === 'asc' ? 'desc' : 'asc';
+  else { _sortKey = key; _sortDir = 'asc'; }
+  renderLoans(_loansFilter);
+}
+function sortRows(rows) {
+  const col = _sortCols.find(c => c.key === _sortKey);
+  const isNum = col && col.type === 'number';
+  return [...rows].sort((a, b) => {
+    let av = a[_sortKey], bv = b[_sortKey];
+    if (av == null) av = isNum ? -Infinity : '';
+    if (bv == null) bv = isNum ? -Infinity : '';
+    const cmp = isNum
+      ? (av - bv)
+      : String(av).localeCompare(String(bv), undefined, { numeric: true });
+    return _sortDir === 'asc' ? cmp : -cmp;
+  });
+}
+async function refreshLoans() {
+  const a = api(); if (!a) return;
+  _allLoans = await a.get_loans();
+  document.getElementById('loans-aside').innerHTML =
+    `${_allLoans.length} loans<br>${_allLoans.reduce((n,l)=>n+(l.inflight_count||0),0)} in flight`;
+  renderLoans(_loansFilter);
+}
+function renderLoans(filter = '') {
+  _loansFilter = filter;
+  const host = document.getElementById('loans-host');
+  if (!_allLoans || _allLoans.length === 0) {
+    host.innerHTML = `<div class="empty">No loans imported yet</div>`;
+    return;
+  }
+  const q = filter.trim().toLowerCase();
+  const filtered = q ? _allLoans.filter(l =>
+    [l.cf_number, l.borrower_name, l.address].some(x => (x||'').toLowerCase().includes(q))
+  ) : _allLoans;
+  if (filtered.length === 0) {
+    host.innerHTML = `<div class="empty">No matches for "${escapeHtml(filter)}"</div>`;
+    return;
+  }
+  const rows = sortRows(filtered);
+  const arrow = k => _sortKey === k ? `<span class="sort-arrow">${_sortDir === 'asc' ? '↑' : '↓'}</span>` : '<span class="sort-arrow"></span>';
+  const headCells = _sortCols.map(c =>
+    `<th data-sort="${c.key}" style="text-align:${c.align}">${c.label}${arrow(c.key)}</th>`
+  ).join('');
+  const fmtDate = s => s ? s.split('T')[0] : '—';
+  host.innerHTML = `
+    <table class="loans-table">
+      <thead><tr>${headCells}</tr></thead>
+      <tbody>
+        ${rows.map(l => `
+          <tr data-loan-id="${l.id}">
+            <td class="cf">${escapeHtml(l.cf_number)}</td>
+            <td class="name">${escapeHtml(l.borrower_name || '—')}</td>
+            <td class="muted">${escapeHtml(l.address || '—')}</td>
+            <td class="num">${fmt$(l.budget_amount)}</td>
+            <td class="num">${fmt$(l.drawn_amount)}</td>
+            <td class="num small">${l.funded_count||0} funded · ${l.inflight_count||0} active</td>
+            <td class="num small">${escapeHtml(fmtDate(l.last_activity))}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+  host.querySelectorAll('thead th').forEach(th => {
+    th.onclick = () => setSort(th.dataset.sort);
+  });
+  host.querySelectorAll('tbody tr').forEach(tr => {
+    tr.onclick = () => openLoanDrawer(Number(tr.dataset.loanId));
+  });
+}
+document.getElementById('loan-search').addEventListener('input', e => renderLoans(e.target.value));
+
+/* ===== LOAN DRAWER (with manual progress stepper + history) ===== */
+const drawer = document.getElementById('drawer');
+document.getElementById('drawer-close').onclick = () => drawer.classList.remove('open');
+let _progressStates = null;       // cached from API on first open
+let _currentDrawerLoanId = null;  // re-fetch after a mutation
+async function ensureProgressStates() {
+  if (_progressStates) return _progressStates;
+  const a = api(); if (!a) return null;
+  _progressStates = await a.get_progress_states();
+  return _progressStates;
+}
+async function openLoanDrawer(loanId) {
+  const a = api(); if (!a) return;
+  _currentDrawerLoanId = loanId;
+  const [r, ps] = await Promise.all([a.get_loan_detail(loanId), ensureProgressStates()]);
+  if (r.error) { toast(r.error); return; }
+  const L = r.loan;
+  document.getElementById('drawer-eyebrow').textContent = `Loan · ${L.cf_number}`;
+  document.getElementById('drawer-title').textContent   = L.address || '—';
+  document.getElementById('drawer-sub').textContent =
+    `${L.borrower_name || ''} · Budget ${fmt$(L.budget_amount)} · Left ${fmt$(L.budget_left)}`;
+  const body = document.getElementById('drawer-body');
+  if (!r.draws.length) {
+    body.innerHTML = `<div class="empty">No draws on file</div>` + drawerControlsHTML(L, r.draws) + xrefSectionHTML(r.cross_refs, L.cf_number);
+  } else {
+    body.innerHTML = r.draws.map(d => renderDrawCard(d, ps)).join('')
+                   + drawerControlsHTML(L, r.draws)
+                   + xrefSectionHTML(r.cross_refs, L.cf_number);
+    body.querySelectorAll('[data-act="back"], [data-act="next"]').forEach(el => {
+      el.onclick = () => advanceProgress(el);
+    });
+  }
+  wireDrawerControls(L);
+  drawer.classList.add('open');
+}
+function renderDrawCard(d, ps) {
+  const order  = ps.order;
+  const labels = ps.labels;
+  const idx = Math.max(0, order.indexOf(d.progress_state || 'order_inspection'));
+  const cur = order[idx];
+  const sheetLbl = stateLabels[d.current_state] || d.current_state || '—';
+  const sheetCls = d.current_state === 'funded' ? 'funded' : '';
+  const amt = d.approved_amount || d.requested_amount;
+  const fundedLine = d.funded_date ? `Funded ${escapeHtml(d.funded_date)}` : '—';
+  const steps = order.map((s, i) => {
+    const cls = i < idx ? 'done' : i === idx ? 'current' : '';
+    return `<li class="prog-step ${cls}"><span class="dot"></span>${escapeHtml(labels[s] || s)}</li>`;
+  }).join('');
+  const histItems = (d.history || []).map(h => `
+    <li><span class="h-when">${escapeHtml((h.at || '').replace('T',' ').slice(0,16))}</span> ·
+        ${escapeHtml(labels[h.from_state] || h.from_state || '∅')}
+        → ${escapeHtml(labels[h.to_state] || h.to_state)}
+        <span class="h-src">${escapeHtml(h.source || '')}</span></li>
+  `).join('');
+  return `
+    <div class="draw-card">
+      <div class="draw-card-head">
+        <div class="draw-num">#${d.draw_number}</div>
+        <div><span class="draw-state ${sheetCls}">${escapeHtml(sheetLbl)}</span></div>
+        <div class="draw-amount">${fmt$(amt)}</div>
+        <div class="draw-when">${fundedLine}</div>
+      </div>
+      <ul class="prog-stepper">${steps}</ul>
+      <div class="prog-controls">
+        <button class="btn ghost xs" data-act="back" data-draw-id="${d.id}" ${idx === 0 ? 'disabled' : ''}>← Back</button>
+        <span class="label">${escapeHtml(labels[cur])}</span>
+        <button class="btn primary xs" data-act="next" data-draw-id="${d.id}" ${idx === order.length - 1 ? 'disabled' : ''}>Next →</button>
+      </div>
+      <details class="prog-history">
+        <summary>History (${(d.history || []).length})</summary>
+        <ul>${histItems || '<li style="color:var(--ink-2)">No transitions yet</li>'}</ul>
+      </details>
+    </div>`;
+}
+async function advanceProgress(el) {
+  const a = api(); if (!a) return;
+  const drawId = Number(el.dataset.drawId);
+  const ps = await ensureProgressStates();
+  const card = el.closest('.draw-card');
+  const curStepLabel = card.querySelector('.prog-step.current')?.textContent.trim();
+  const curIdx = ps.order.findIndex(s => ps.labels[s] === curStepLabel);
+  if (curIdx < 0) { toast('Could not determine current state'); return; }
+  const delta = el.dataset.act === 'back' ? -1 : 1;
+  const newIdx = Math.max(0, Math.min(ps.order.length - 1, curIdx + delta));
+  if (newIdx === curIdx) return;
+  await progressAction(drawId, ps.order[newIdx]);
+  if (_currentDrawerLoanId) await openLoanDrawer(_currentDrawerLoanId);
+}
+
+/* progressAction — single entry point for all progress changes.
+   Routes through the backend's draw_progress_action so the "entering
+   order_inspection fresh = submit draw request" merge can kick in. */
+async function progressAction(drawId, newState) {
+  const a = api(); if (!a) return null;
+  const r = await a.draw_progress_action(drawId, newState);
+  if (!r || r.error) { toast(r?.error || 'Update failed'); return r; }
+  if (r.action === 'run_script') {
+    // Confirm — submitting to ProxyPics is a real-world side effect.
+    if (!confirm(`Move this draw into "Order Inspection" by submitting a ProxyPics draw request now?\n\nProperty: ${r.address || '(unknown)'}\n\nCancel to leave the state unchanged.`)) {
+      return { ok: false, cancelled: true };
+    }
+    await runDrawRequestForDraw(r.draw_id, r.address || '');
+    return { ok: true, action: 'run_script' };
+  }
+  toastOk(`Moved → ${newState}`);
+  return r;
+}
+
+function drawerControlsHTML(loan, draws) {
+  const last = draws[draws.length - 1];
+  const lastWired = last && last.progress_state === 'wire_sent';
+  const total = loan.total_draws ?? draws.length;
+  const canAdd = draws.length < total || lastWired;
+  return `
+    <div class="drawer-controls">
+      <div class="dc-row">
+        <span class="dc-label">Total draws planned</span>
+        <input type="number" id="dc-total" min="0" value="${total}" style="width:64px; text-align:center; font-family:var(--f-mono);">
+        <button class="btn ghost xs" id="dc-total-save">Save</button>
+        <span class="dc-label" style="margin-left:auto;">${draws.length} on file</span>
+      </div>
+      <div class="dc-row">
+        <button class="btn primary xs" id="dc-add" ${canAdd ? '' : 'disabled'}>+ Add draw #${draws.length + 1}</button>
+        ${lastWired ? '<span class="dc-hint">Last draw wire-sent. Start the next one?</span>' : ''}
+      </div>
+    </div>`;
+}
+
+function xrefSectionHTML(crossRefs, cfNumber) {
+  if (!crossRefs || !Object.keys(crossRefs).length) return '';
+  const blocks = Object.entries(crossRefs).map(([sheet, rows]) => {
+    const rowBlocks = rows.map((row, i) => {
+      const fields = Object.entries(row)
+        .filter(([k, v]) => v && String(v).trim() && !k.startsWith('col_'))
+        .map(([k, v]) => `<div class="xref-field"><span class="xref-k">${escapeHtml(k)}</span><span class="xref-v">${escapeHtml(String(v))}</span></div>`)
+        .join('');
+      return `<div class="xref-row">${fields || '<div class="xref-field">(no labelled fields)</div>'}</div>`;
+    }).join('');
+    return `<details class="xref-sheet" open>
+      <summary><b>${escapeHtml(sheet)}</b> <span class="xref-count">${rows.length} row${rows.length !== 1 ? 's' : ''}</span></summary>
+      ${rowBlocks}
+    </details>`;
+  }).join('');
+  return `
+    <div class="xref-section">
+      <h3>Other sheets referencing ${escapeHtml(cfNumber)}</h3>
+      ${blocks}
+    </div>`;
+}
+function wireDrawerControls(loan) {
+  const totalSave = document.getElementById('dc-total-save');
+  if (totalSave) totalSave.onclick = async () => {
+    const v = Number(document.getElementById('dc-total').value);
+    const r = await api().set_total_draws(loan.id, v);
+    if (r && r.error) { toast(r.error); return; }
+    toastOk('Total saved');
+    if (_currentDrawerLoanId) openLoanDrawer(_currentDrawerLoanId);
+  };
+  const addBtn = document.getElementById('dc-add');
+  if (addBtn) addBtn.onclick = async () => {
+    const r = await api().add_draw(loan.id);
+    if (r && r.error) { toast(r.error); return; }
+    toastOk(`Draw #${r.draw_number} added`);
+    if (_currentDrawerLoanId) openLoanDrawer(_currentDrawerLoanId);
+  };
+}
+
+async function runDrawRequestForDraw(drawId, address) {
+  // Threads draw_id through to the script's run() handler so the backend
+  // can auto-advance progress on success. Opens the existing script panel
+  // with the loan's address pre-filled.
+  _pendingDrawId = drawId;
+  const s = SCRIPTS.find(x => x.slug === 'draw-request');
+  if (!s) { toast('Draw-request script not registered'); return; }
+  await openPanel(s, { address });
+}
+
+/* ===== SETTINGS ===== */
+async function loadSettings() {
+  const a = api(); if (!a) return;
+  SETTINGS = await a.get_settings();
+  // Apply the theme immediately, before any view paints, so we don't get
+  // a flash of the default theme on startup.
+  applyTheme(SETTINGS.theme || 'blueprint');
+}
+function refreshSettingsUI() {
+  if (!SETTINGS) return;
+  const gs = SETTINGS.connections.google_sheets;
+  document.getElementById('gs-credentials-path').value = gs.credentials_path || '';
+  document.getElementById('gs-spreadsheet-id').value   = gs.spreadsheet_id   || '';
+  document.getElementById('gs-sheet-name').value       = gs.sheet_name       || 'Draw';
+  document.getElementById('gs-range').value            = gs.range            || 'A:DZ';
+  document.getElementById('gs-auto-sync').checked      = !!gs.auto_sync;
+  document.getElementById('gs-interval').value         = String(gs.interval_minutes || 15);
+  document.getElementById('gs-write-enabled').checked  = !!gs.write_enabled;
+  document.getElementById('gs-auto-write').checked     = !!gs.auto_write;
+  document.getElementById('bl-api-key').value          = SETTINGS.connections.baseline.api_key || '';
+  document.getElementById('sys-script-dir').value      = SETTINGS.scriptDir || '';
+  // Theme dropdown — also re-applies the theme so the UI is consistent if
+  // settings.json was edited externally.
+  const theme = SETTINGS.theme || 'blueprint';
+  document.getElementById('pref-theme').value = theme;
+  applyTheme(theme);
+}
+
+// Apply a theme by setting data-theme on <html>. CSS does the rest.
+// Also mirrors to localStorage so the head-level pre-paint script can apply
+// the same theme on next launch without waiting for the JS-API round trip.
+function applyTheme(name) {
+  const safe = (name === 'light') ? 'light' : 'blueprint';
+  if (safe === 'blueprint') {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', safe);
+  }
+  try { localStorage.setItem('dm_theme', safe); } catch (e) {}
+}
+
+document.getElementById('gs-browse').onclick = async () => {
+  const a = api(); if (!a) return;
+  const path = await a.pick_file('sheet_source');
+  if (path && typeof path === 'string') {
+    document.getElementById('gs-credentials-path').value = path;
+  } else if (path && path.error) toast(path.error);
+};
+document.getElementById('gs-test').onclick = async () => {
+  const a = api(); if (!a) return;
+  await saveCurrentSettings();
+  const el = document.getElementById('gs-test-result');
+  el.className = 'test-result'; el.textContent = 'Testing…';
+  const r = await a.gsheet_test();
+  if (r.error) {
+    el.className = 'test-result err';
+    el.textContent = 'ERROR: ' + r.error;
+    toast('Test failed');
+    return;
+  }
+  // Success — render workbook info; if the configured sheet name doesn't
+  // match any tab, surface clickable fix buttons.
+  const sheets = r.sheets || [];
+  const sheetChips = sheets.map(name => {
+    const isCurrent = name === r.configured_sheet;
+    return `<button class="btn ghost small sheet-chip" data-sheet="${escapeHtml(name)}"
+                    style="margin:2px; ${isCurrent ? 'border-color:var(--ok); font-weight:700;' : ''}">${escapeHtml(name)}${isCurrent ? ' ✓' : ''}</button>`;
+  }).join(' ');
+  if (r.sheet_name_ok) {
+    el.className = 'test-result ok';
+    el.innerHTML = `Connected to <b>${escapeHtml(r.title)}</b> · sheet <b>${escapeHtml(r.configured_sheet || '(none)')}</b> resolves OK
+                    <div style="margin-top:8px; font-size:11px; color:var(--ink-2);">Tabs in workbook (click to switch):</div>
+                    <div style="margin-top:4px;">${sheetChips}</div>`;
+    toast('Test OK');
+  } else {
+    el.className = 'test-result err';
+    el.innerHTML = `Connected to <b>${escapeHtml(r.title)}</b> but configured sheet
+                    <b>'${escapeHtml(r.configured_sheet)}'</b> isn't in the workbook.
+                    <div style="margin-top:8px; font-size:11px;">Click the right one to fix it:</div>
+                    <div style="margin-top:4px;">${sheetChips}</div>`;
+    toast('Sheet name mismatch — pick one below');
+  }
+  // Wire the chip clicks: set the sheet_name field and re-test.
+  el.querySelectorAll('.sheet-chip').forEach(btn => {
+    btn.onclick = async () => {
+      document.getElementById('gs-sheet-name').value = btn.dataset.sheet;
+      await saveCurrentSettings();
+      toastOk(`Sheet name → ${btn.dataset.sheet}`);
+      document.getElementById('gs-test').click();
+    };
+  });
+};
+document.getElementById('gs-sync-now').onclick = async () => {
+  const a = api(); if (!a) return;
+  await saveCurrentSettings();
+  const el = document.getElementById('gs-test-result');
+  el.className = 'test-result'; el.textContent = 'Syncing…';
+  const r = await a.gsheet_sync_now();
+  if (r.error) {
+    el.className = 'test-result err';
+    // If the backend gave us the available_sheets list (because the
+    // configured sheet name was wrong), render a one-click fix UI.
+    if (r.available_sheets && r.available_sheets.length) {
+      const chips = r.available_sheets.map(name =>
+        `<button class="btn ghost small sheet-chip" data-sheet="${escapeHtml(name)}" style="margin:2px;">${escapeHtml(name)}</button>`
+      ).join(' ');
+      el.innerHTML = `ERROR: ${escapeHtml(r.error)}
+                      <div style="margin-top:8px; font-size:11px;">Available tabs — click to set and retry:</div>
+                      <div style="margin-top:4px;">${chips}</div>`;
+      el.querySelectorAll('.sheet-chip').forEach(btn => {
+        btn.onclick = async () => {
+          document.getElementById('gs-sheet-name').value = btn.dataset.sheet;
+          await saveCurrentSettings();
+          toastOk(`Sheet name → ${btn.dataset.sheet}`);
+          document.getElementById('gs-sync-now').click();
+        };
+      });
+      toast('Wrong sheet name — pick one below');
+    } else {
+      el.textContent = 'ERROR: ' + r.error;
+      toast('Sync failed');
+    }
+  } else {
+    el.className = 'test-result ok';
+    el.innerHTML = `Sync complete · Loans parsed: <b>${r.loans_parsed}</b> · inserted: <b>${r.loans_inserted}</b> · updated: <b>${r.loans_updated}</b> · state changes: <b>${r.state_changes}</b>`;
+    toastOk('Sync complete');
+    silentRefresh();
+  }
+};
+
+async function saveCurrentSettings() {
+  const a = api(); if (!a) return;
+  const payload = {
+    scriptDir: document.getElementById('sys-script-dir').value,
+    theme:     document.getElementById('pref-theme').value || 'blueprint',
+    connections: {
+      baseline: { api_key: document.getElementById('bl-api-key').value },
+      google_sheets: {
+        credentials_path: document.getElementById('gs-credentials-path').value,
+        spreadsheet_id:   document.getElementById('gs-spreadsheet-id').value,
+        sheet_name:       document.getElementById('gs-sheet-name').value,
+        range:            document.getElementById('gs-range').value,
+        auto_sync:        document.getElementById('gs-auto-sync').checked,
+        interval_minutes: parseInt(document.getElementById('gs-interval').value, 10),
+        write_enabled:    document.getElementById('gs-write-enabled').checked,
+        auto_write:       document.getElementById('gs-auto-write').checked,
+      }
+    }
+  };
+  SETTINGS = await a.save_settings(payload);
+}
+
+// Live-apply the theme as soon as the dropdown changes (don't wait for Save).
+document.getElementById('pref-theme').addEventListener('change', (e) => {
+  applyTheme(e.target.value);
+});
+
+// Test-write button: round-trip a sentinel into a far-out cell and back out.
+// Surfaces permission errors clearly (the most common failure mode).
+document.getElementById('gs-test-write').onclick = async () => {
+  const a = api(); if (!a) return;
+  await saveCurrentSettings();
+  const el = document.getElementById('gs-write-result');
+  el.className = 'test-result'; el.textContent = 'Writing test cell…';
+  const r = await a.gsheet_test_write();
+  if (r.error) {
+    el.className = 'test-result err';
+    el.innerHTML = 'ERROR: ' + escapeHtml(r.error)
+      + '<div style="margin-top:8px; font-size:11px;">If this says "PERMISSION_DENIED" or similar: open the spreadsheet, click Share, and add the service account email (found in your .json under <code>client_email</code>) as an <b>Editor</b>.</div>';
+    toast('Write test failed');
+  } else {
+    el.className = 'test-result ok';
+    el.innerHTML = `Write OK · wrote and cleared <b>${escapeHtml(r.cell || '')}</b>`;
+    toastOk('Write access confirmed');
+  }
+};
+
+document.getElementById('btn-save').onclick = async () => {
+  await saveCurrentSettings();
+  toast('Settings saved');
+};
+document.getElementById('btn-reload').onclick = async () => {
+  await loadSettings(); refreshSettingsUI(); toast('Reloaded');
+};
+
+document.getElementById('btn-clear-paste').onclick = () => {
+  document.getElementById('set-sheet').value = '';
+  document.getElementById('import-result').innerHTML = '';
+};
+document.getElementById('btn-import').onclick = async () => {
+  const a = api(); if (!a) return;
+  const text = document.getElementById('set-sheet').value;
+  if (!text.trim()) { toast('Paste sheet content first'); return; }
+  const result = document.getElementById('import-result');
+  result.className = 'test-result';
+  result.innerHTML = 'Importing…';
+  const r = await a.import_sheet(text);
+  if (r.error) {
+    result.className = 'test-result err';
+    result.innerHTML = 'ERROR: ' + escapeHtml(r.error);
+    return;
+  }
+  result.className = 'test-result ok';
+  result.innerHTML = `Loans parsed: <b>${r.loans_parsed}</b> · inserted: <b>${r.loans_inserted}</b> · updated: <b>${r.loans_updated}</b> · state changes: <b>${r.state_changes}</b>`;
+  toast('Import complete');
+  silentRefresh();
+};
+
+/* ===== SCRIPTS ===== */
+const SCRIPTS = [
+  {
+    id: 'SCR-001', slug: 'draw-request',
+    name: 'Submit Draw Request',
+    desc: 'Looks up the property in Casa Finance, pulls CF# and contacts, fills ProxyPics through Next.',
+    statusText: 'READY',
+    fields: [{ id:'address', label:'Property address', placeholder:'2307 Chestnut St, Houston, TX', required:true }],
+    settingFields: [
+      { id:'inspection_type', label:'Inspection type', type:'text', placeholder:'draw inspection without floorplan' },
+      { id:'progress_step',   label:'Progress step', type:'select', options:['1','5','10','15','20','25','50','75','100'] },
+      { id:'contact_choice',  label:'Contact pick',  type:'select', options:[
+          {value:'auto', label:'auto'},
+          {value:'1', label:'1 (Borrower)'},
+          {value:'2', label:'2 (Guarantor)'}],
+        help: '"auto" picks the contact with email + phone.' },
+      { id:'workers',  label:'Parallel workers', type:'select',
+        options:['1','2','3','4','5','6','7','8','10','12','15','20'],
+        help: 'More than 1 = Run launches all imported loans in parallel.' },
+      { id:'live_submit', label:'Mode', type:'select', options:[
+          {value:'false', label:'TEST — stop before Submit'},
+          {value:'true',  label:'LIVE — actually click Submit'}],
+        help: 'LIVE really submits each draw request. Leave on TEST for demos.' },
+      { id:'headless', label:'Headless', type:'select', options:[
+          {value:'false', label:'No — show the browser'},
+          {value:'true',  label:'Yes — run hidden'}],
+        help: 'Headless runs with no visible browser window.' },
+    ],
+    run: async (d) => {
+      if (_pendingDrawId) {
+        const id = _pendingDrawId; _pendingDrawId = null;
+        return api().run_draw_request_for_draw(id);
+      }
+      return api().run_draw_request(d.address);
+    }
+  },
+];
+function scriptCardHTML(s) {
+  return `
+    <article class="script" data-slug="${s.slug}">
+      <div class="script-head">
+        <div class="script-id">${s.id}</div>
+        <div class="script-status">${s.statusText}</div>
+      </div>
+      <div class="script-name">${s.name}</div>
+      <div class="script-desc">${s.desc}</div>
+      <div class="script-foot">
+        <span>LOCAL · PYTHON</span>
+        <span class="run-hint">Run</span>
+      </div>
+    </article>`;
+}
+document.getElementById('scripts-grid').innerHTML = SCRIPTS.map(scriptCardHTML).join('');
+document.addEventListener('click', e => {
+  const card = e.target.closest('.script');
+  if (!card) return;
+  const s = SCRIPTS.find(x => x.slug === card.dataset.slug);
+  if (s) openPanel(s);
+});
+
+/* ===== Run panel ===== */
+const overlay = document.getElementById('overlay');
+const panelTitle = document.getElementById('panel-title');
+const panelEye   = document.getElementById('panel-eyebrow');
+const panelBody  = document.getElementById('panel-body');
+const panelRun   = document.getElementById('panel-run');
+const panelCancel= document.getElementById('panel-cancel');
+const panelClose = document.getElementById('panel-close');
+const panelGear  = document.getElementById('panel-gear');
+const panelNote  = document.getElementById('panel-note');
+let activeScript = null, activeTaskId = null, pollTimer = null;
+let panelMode = 'run';          // 'run' | 'settings'
+let scriptSettings = {};
+let _pendingDrawId = null;      // set by runDrawRequestForDraw before openPanel
+
+async function openPanel(s, prefill) {
+  activeScript = s; activeTaskId = null;
+  clearInterval(pollTimer);
+  scriptSettings = (await api().get_script_settings(s.slug)) || {};
+  panelTitle.textContent = s.name;
+  panelEye.textContent   = `Script · ${s.id}`;
+  panelNote.textContent  = 'Idle'; panelNote.className = 'panel-foot-note';
+  panelRun.textContent   = 'Run'; panelRun.disabled = false;
+  setPanelMode('run');
+  overlay.classList.add('open');
+  if (prefill) {
+    Object.entries(prefill).forEach(([k, v]) => {
+      const inp = panelBody.querySelector(`[data-fid="${k}"]`);
+      if (inp) inp.value = v;
+    });
+  }
+  setTimeout(() => panelBody.querySelector('input,textarea,select')?.focus(), 100);
+}
+function closePanel() {
+  overlay.classList.remove('open');
+  clearInterval(pollTimer); pollTimer = null;
+  _pendingDrawId = null;
+}
+panelClose.onclick = closePanel;
+panelCancel.onclick = async () => {
+  if (panelMode === 'settings') { setPanelMode('run'); return; }
+  // Force-stop whatever is running: a parallel batch and/or a single task.
+  clearInterval(pollTimer); pollTimer = null;
+  const a = api();
+  if (a) {
+    if (_batchId) { try { await a.cancel_batch(_batchId); } catch (e) {} _batchId = null; }
+    if (activeTaskId) { try { await a.cancel_task(activeTaskId); } catch (e) {} }
+  }
+  toast('Stopped');
+  closePanel();
+};
+overlay.addEventListener('click', e => { if (e.target === overlay) closePanel(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (overlay.classList.contains('open')) closePanel();
+    if (drawer.classList.contains('open'))  drawer.classList.remove('open');
+  }
+});
+
+function defaultsPreviewHTML() {
+  if (!activeScript || !activeScript.settingFields) return '';
+  const parts = activeScript.settingFields.map(f => {
+    const v = scriptSettings[f.id] ?? '—';
+    return `${escapeHtml(f.label.toLowerCase())} · <b>${escapeHtml(String(v))}</b>`;
+  }).join(' · ');
+  return `<div class="defaults-preview">
+    <div>${parts}</div>
+    <div class="edit" id="defaults-edit-link">EDIT →</div>
+  </div>`;
+}
+/* ===== Parallel batch runner (Submit Draw only) ===== */
+let _batchId = null;
+let _batchPoll = null;
+let _lastImportedAddrs = [];   // addresses from the most recent loan-file import
+
+function renderBatch(r) {
+  const prog = document.getElementById('batch-progress');
+  if (!prog) return;
+  const c = r.counts || {};
+  const colorFor = { queued:'#9aa7b4', running:'#c8860a', done:'#2e7d32', failed:'var(--red)' };
+  const rows = (r.items || []).map(it => {
+    const col  = colorFor[it.state] || '#9aa7b4';
+    const tail = (it.tail || []).slice(-1)[0] || '';
+    return `<div style="display:flex; gap:8px; align-items:flex-start; padding:3px 0; border-bottom:1px solid var(--line-faint); font-size:12px;">
+      <span style="width:9px; height:9px; border-radius:50%; background:${col}; margin-top:4px; flex:0 0 auto;"></span>
+      <span style="flex:0 0 190px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(it.address)}</span>
+      <span style="flex:0 0 64px; color:${col}; font-family:var(--f-mono);">${it.state}</span>
+      <span style="flex:1; color:var(--ink-2); font-family:var(--f-mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(tail)}</span>
+    </div>`;
+  }).join('');
+  prog.innerHTML = `<div style="font-family:var(--f-mono); font-size:11px; margin-bottom:6px;">
+      ${r.done ? 'DONE' : 'RUNNING'} \u00b7 ${r.live ? '<b style="color:var(--red)">LIVE</b>' : 'TEST'}
+      \u00b7 done ${c.done || 0}/${r.total} \u00b7 running ${c.running || 0} \u00b7 queued ${c.queued || 0} \u00b7 failed ${c.failed || 0}
+    </div>${rows}`;
+}
+
+function injectLoanImport() {
+  // Only the Submit Draw script gets the "import a test loan file" affordance.
+  if (!activeScript || activeScript.slug !== 'draw-request') return;
+  if (document.getElementById('import-loan-file-btn')) return;
+  const slot = document.getElementById('terminal-slot');
+  if (!slot) return;
+  const block = document.createElement('div');
+  block.className = 'settings-grid';
+  block.style.cssText = 'grid-template-columns:160px 1fr; padding:12px 0; border-top:1px solid var(--line-faint); margin-top:4px;';
+  block.innerHTML = `
+    <div class="key">Test data<small>Loan not on the sheet? Import a draw-log .xlsx/.csv (Draw #, Name, Address, AA …).</small></div>
+    <div class="field">
+      <button class="btn ghost small" id="import-loan-file-btn" type="button">Import loan file…</button>
+      <div class="test-result" id="import-loan-file-result" style="margin-top:8px; display:none;"></div>
+    </div>`;
+  slot.parentNode.insertBefore(block, slot);
+
+  const btn = document.getElementById('import-loan-file-btn');
+  const result = document.getElementById('import-loan-file-result');
+  btn.onclick = async () => {
+    if (!API_READY) { toast('Not ready'); return; }
+    const path = await api().pick_file('loan_import');
+    if (!path || typeof path !== 'string') return;
+    result.style.display = 'block';
+    result.className = 'test-result';
+    result.textContent = 'Importing…';
+    const r = await api().import_loan_file(path);
+    if (!r || r.error) {
+      result.className = 'test-result err';
+      result.textContent = 'ERROR: ' + ((r && r.error) || 'unknown error');
+      return;
+    }
+    result.className = 'test-result ok';
+    const names = (r.imported || []).map(x => x.cf_number).join(', ');
+    // Fill the required address field from the import so you don't retype it.
+    // With multiple loans, wire up a datalist dropdown to switch between them.
+    const addrs = (r.imported || []).map(x => x.address).filter(Boolean);
+    _lastImportedAddrs = addrs;   // parallel Run uses exactly these, not the whole DB
+    const inp = panelBody.querySelector('[data-fid="address"]');
+    if (inp && addrs.length) {
+      let dl = document.getElementById('imported-addr-list');
+      if (!dl) { dl = document.createElement('datalist'); dl.id = 'imported-addr-list'; document.body.appendChild(dl); }
+      dl.innerHTML = addrs.map(a => `<option value="${escapeHtml(a)}"></option>`).join('');
+      inp.setAttribute('list', 'imported-addr-list');
+      inp.value = addrs[0];   // satisfies the required field immediately
+    }
+    const pickHint = addrs.length > 1
+      ? ` · address set to <b>${escapeHtml(addrs[0])}</b> (pick another from the address dropdown)`
+      : (addrs.length === 1 ? ` · address filled in` : '');
+    result.innerHTML = `Imported <b>${r.loans_parsed}</b> loan(s) from ${escapeHtml(r.source || 'file')}: ${escapeHtml(names)}${pickHint}`;
+    toast('Loan file imported');
+    if (typeof silentRefresh === 'function') silentRefresh();
+  };
+}
+
+function renderRunForm() {
+  const s = activeScript;
+  panelBody.innerHTML = (s.fields || []).map(f => `
+    <div class="settings-grid" style="grid-template-columns: 160px 1fr; padding: 12px 0;">
+      <div class="key">${f.label}${f.required ? ' *' : ''}</div>
+      <div class="field"><input type="text" data-fid="${f.id}" placeholder="${f.placeholder || ''}"></div>
+    </div>`).join('') + defaultsPreviewHTML() + `<div id="terminal-slot"></div>`;
+  const link = document.getElementById('defaults-edit-link');
+  if (link) link.onclick = () => setPanelMode('settings');
+  injectLoanImport();
+}
+function renderSettingsForm() {
+  const s = activeScript;
+  panelBody.innerHTML = `<div style="font-family:var(--f-mono); font-size:11.5px; color:var(--ink-2); text-transform:uppercase; letter-spacing:.14em; margin-bottom: 14px;">Defaults for <b style="color:var(--red); font-weight:700;">${escapeHtml(s.id)}</b> — applied to every run</div>` +
+    (s.settingFields || []).map(f => {
+      let inputHTML = '';
+      if (f.type === 'select') {
+        const opts = (f.options || []).map(o =>
+          typeof o === 'string'
+            ? `<option value="${o}" ${scriptSettings[f.id] == o ? 'selected' : ''}>${o}</option>`
+            : `<option value="${o.value}" ${scriptSettings[f.id] == o.value ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
+        ).join('');
+        inputHTML = `<select data-sfid="${f.id}">${opts}</select>`;
+      } else if (f.type === 'file') {
+        inputHTML = `<div class="row-inputs">
+          <input type="text" data-sfid="${f.id}" value="${escapeHtml(scriptSettings[f.id] ?? '')}" placeholder="${escapeHtml(f.placeholder || '')}">
+          <button class="btn ghost small" data-sf-browse="${f.id}" data-pick="${escapeHtml(f.pickKind || 'csv')}">Browse…</button>
+        </div>`;
+      } else {
+        inputHTML = `<input type="text" data-sfid="${f.id}" value="${escapeHtml(scriptSettings[f.id] ?? '')}" placeholder="${escapeHtml(f.placeholder || '')}">`;
+      }
+      return `
+        <div class="settings-grid" style="grid-template-columns: 180px 1fr; padding: 12px 0;">
+          <div class="key">${escapeHtml(f.label)}${f.help ? `<small>${escapeHtml(f.help)}</small>` : ''}</div>
+          <div class="field">${inputHTML}</div>
+        </div>`;
+    }).join('');
+  panelBody.querySelectorAll('[data-sf-browse]').forEach(btn => {
+    btn.onclick = async () => {
+      const path = await api().pick_file(btn.dataset.pick || 'csv');
+      if (path && typeof path === 'string') {
+        const target = panelBody.querySelector(`[data-sfid="${btn.dataset.sfBrowse}"]`);
+        if (target) target.value = path;
+      }
+    };
+  });
+}
+function setPanelMode(mode) {
+  panelMode = mode;
+  if (mode === 'run') {
+    panelGear.classList.remove('active');
+    panelGear.title = 'Script settings';
+    panelRun.textContent = 'Run';
+    panelCancel.textContent = 'Cancel';
+    renderRunForm();
+  } else {
+    panelGear.classList.add('active');
+    panelGear.title = 'Back to run';
+    panelRun.textContent = 'Save defaults';
+    panelCancel.textContent = 'Discard';
+    renderSettingsForm();
+  }
+}
+panelGear.onclick = () => setPanelMode(panelMode === 'run' ? 'settings' : 'run');
+
+panelRun.onclick = async () => {
+  if (!activeScript || !API_READY) { toast('Not ready'); return; }
+  if (panelMode === 'settings') {
+    // SAVE script settings
+    const inputs = panelBody.querySelectorAll('[data-sfid]');
+    const newVals = {};
+    inputs.forEach(i => { newVals[i.dataset.sfid] = i.value; });
+    scriptSettings = await api().save_script_settings(activeScript.slug, newVals);
+    toast('Defaults saved');
+    setPanelMode('run');
+    return;
+  }
+  // RUN mode
+  // If Parallel workers > 1, Run launches every imported loan in parallel
+  // (per the worker count + TEST/LIVE mode set in settings).
+  const workers = parseInt((scriptSettings && scriptSettings.workers) || '1', 10) || 1;
+  if (activeScript.slug === 'draw-request' && workers > 1) {
+    // Run ONLY the loans from the last import — never the entire database.
+    const addrs = _lastImportedAddrs.slice();
+    if (!addrs.length) {
+      toast('Import a draw-log file first (settings → Test data)');
+      return;
+    }
+    panelRun.disabled = true; panelRun.textContent = 'Running…';
+    panelNote.textContent = 'Launching parallel runs…';
+    panelNote.className = 'panel-foot-note busy';
+    const slot = document.getElementById('terminal-slot');
+    slot.innerHTML = '<div id="batch-progress"></div>';
+    const r = await api().run_draw_request_batch(addrs);   // explicit list
+    if (!r || r.error) {
+      slot.innerHTML = '<span class="test-result err">ERROR: ' + escapeHtml((r && r.error) || 'unknown') + '</span>';
+      panelNote.textContent = 'Failed'; panelRun.disabled = false; panelRun.textContent = 'Retry';
+      return;
+    }
+    _batchId = r.batchId;
+    panelNote.textContent = `Running ${r.count} in parallel · ${r.workers} at a time` + (r.live ? ' · LIVE' : '');
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      const s = await api().poll_batch(_batchId);
+      if (!s || s.error) return;
+      renderBatch(s);
+      if (s.done) {
+        clearInterval(pollTimer); pollTimer = null;
+        panelNote.textContent = `Done · ${s.counts.done || 0}/${s.total} ok, ${s.counts.failed || 0} failed`;
+        panelNote.className = 'panel-foot-note done';
+        panelRun.disabled = false; panelRun.textContent = 'Run again';
+        if (typeof silentRefresh === 'function') silentRefresh();
+      }
+    }, 800);
+    return;
+  }
+
+  const inputs = panelBody.querySelectorAll('input[data-fid]');
+  const data = {};
+  let missing = false;
+  inputs.forEach(i => {
+    data[i.dataset.fid] = i.value.trim();
+    const req = activeScript.fields.find(f => f.id === i.dataset.fid)?.required;
+    if (req && !i.value.trim()) { missing = true; i.style.borderColor = 'var(--red)'; }
+  });
+  if (missing) { toast('Fill required fields'); return; }
+  panelRun.disabled = true; panelRun.textContent = 'Running…';
+  panelNote.textContent = 'Spawning subprocess…';
+  panelNote.className = 'panel-foot-note busy';
+  document.getElementById('terminal-slot').innerHTML = `<div class="terminal" id="term"><button class="terminal-copy" id="term-copy" title="Copy all output">Copy</button><span class="term-text" id="term-text"></span></div>`;
+  const term = document.getElementById('term');
+  const termText = document.getElementById('term-text');
+  // Wire the copy button. The button itself is in the terminal box, so we
+  // copy only the contents of the inner span and skip the button text.
+  document.getElementById('term-copy').onclick = async (ev) => {
+    ev.preventDefault();
+    const btn = ev.currentTarget;
+    const text = termText.innerText || '';
+    const finish = () => {
+      btn.classList.add('copied');
+      const orig = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.classList.remove('copied'); btn.textContent = orig; }, 1100);
+    };
+    try {
+      await navigator.clipboard.writeText(text);
+      finish();
+    } catch (e) {
+      // Fallback for older webviews that block async clipboard.
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(termText);
+        const sel = window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        document.execCommand('copy');
+        sel.removeAllRanges();
+        finish();
+      } catch (e2) {
+        toast('Copy failed: ' + e2.message);
+      }
+    }
+  };
+  let result;
+  try { result = await activeScript.run(data); }
+  catch (e) {
+    termText.textContent = 'ERROR: ' + e.message;
+    panelNote.textContent = 'Failed'; panelRun.disabled = false; panelRun.textContent = 'Retry';
+    return;
+  }
+  if (result?.error) {
+    termText.textContent = 'ERROR: ' + result.error;
+    panelNote.textContent = 'Failed'; panelRun.disabled = false; panelRun.textContent = 'Retry';
+    return;
+  }
+  activeTaskId = result.taskId;
+  termText.textContent = `$ ${result.cmd}\n`;
+  panelNote.textContent = `Task ${activeTaskId} · streaming…`;
+  let lastLen = 0;
+  pollTimer = setInterval(async () => {
+    const a = api(); if (!a) return;
+    const s = await a.poll_task(activeTaskId);
+    if (!s) return;
+    if (s.output && s.output.length > lastLen) {
+      termText.textContent += s.output.slice(lastLen).join('\n') + '\n';
+      term.scrollTop = term.scrollHeight;
+      lastLen = s.output.length;
+    }
+    if (s.done) {
+      clearInterval(pollTimer); pollTimer = null;
+      const ok = s.rc === 0;
+      panelNote.textContent = ok ? `Complete · rc=${s.rc}` : `Exited rc=${s.rc}`;
+      panelNote.className = 'panel-foot-note ' + (ok ? 'done' : '');
+      panelRun.disabled = false; panelRun.textContent = 'Run again';
+      // If this task was linked to a draw, refresh the drawer + pipeline so
+      // the auto-advanced progress state shows up immediately.
+      if (ok && s.draw_id) {
+        toastOk('Draw progress advanced');
+        if (_currentDrawerLoanId) openLoanDrawer(_currentDrawerLoanId);
+        if (CURRENT_VIEW === 'pipeline') refreshKanban();
+      }
+    }
+  }, 600);
+};
+
+/* ===== toast / clock ===== */
+const toastEl = document.getElementById('toast');
+let toastTimer;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.remove('ok');
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
+}
+function toastOk(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show', 'ok');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+}
+const clockEl = document.getElementById('tb-clock');
+function tick() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  clockEl.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} LOCAL`;
+}
+tick(); setInterval(tick, 1000);
+
+if (window.pywebview && window.pywebview.api) {
+  API_READY = true;
+  loadSettings().then(refreshAll).then(startStatusPoll);
+}
+</script>
+</body>
+</html>

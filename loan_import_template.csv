@@ -1,0 +1,2 @@
+CF#,Borrower Name,Address,FCI Loan #,Budget Amount,Budget Left,Draw1 Requested,Draw1 Inspection Ordered,Draw1 Appraisal Paid,Draw1 Appraisal Received,Draw1 Email Sent,Draw1 Approved Amount,Draw1 FCI Updated,Draw1 Funded Date
+CF999,Test Borrower LLC,123 Testing Ave,FCI-777,100000,40000,22875,FALSE,FALSE,FALSE,FALSE,,FALSE,
