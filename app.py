@@ -42,15 +42,16 @@ PYTHON        = sys.executable
 # ---------------------------------------------------------------------------
 # Version + auto-update
 # ---------------------------------------------------------------------------
-VERSION = "0.1.2"   # <-- bump this, push to main; CI tags a release v<VERSION>
+VERSION = "0.1.3"   # <-- bump this, push to main; CI tags a release v<VERSION>
 
 # Your GitHub repo, "owner/name". The updater hits the public Releases API.
 # If you rename the repo, change this string (it's the only place it lives).
-GITHUB_REPO = "casafinance/draw-manager"
+GITHUB_REPO = "CHANGE_ME/draw-manager"
 
-# Names of the two release assets CI uploads. Must match build-release.yml.
+# Names of the release assets CI uploads. Must match build-release.yml.
 _ASSET_MAIN   = "Draw Manager.exe"
 _ASSET_WORKER = "draw-request.exe"
+_ASSET_CASA   = "casa-updater.exe"
 
 # Updater status, polled by the UI titlebar indicator.
 #   state: "idle" | "checking" | "up_to_date" | "updating" | "error"
@@ -108,7 +109,8 @@ def _download(url: str, dest: Path):
             f.write(chunk)
 
 
-def _apply_update_and_relaunch(new_main: Path, new_worker: Path | None):
+def _apply_update_and_relaunch(new_main: Path, new_worker: Path | None,
+                               new_casa: Path | None = None):
     """Windows locks running exes, so we can't overwrite ourselves directly.
     Strategy: write a .bat that waits for THIS process to exit, copies the
     freshly-downloaded exes over the live ones, relaunches the main exe, then
@@ -117,6 +119,7 @@ def _apply_update_and_relaunch(new_main: Path, new_worker: Path | None):
         return  # only meaningful for the frozen Windows build
     cur_main   = APP_DIR / _ASSET_MAIN
     cur_worker = APP_DIR / _ASSET_WORKER
+    cur_casa   = APP_DIR / _ASSET_CASA
     pid = os.getpid()
     bat = APP_DIR / "_dm_update.bat"
 
@@ -135,6 +138,8 @@ def _apply_update_and_relaunch(new_main: Path, new_worker: Path | None):
     ]
     if new_worker is not None:
         lines.append(f'move /Y "{new_worker}" "{cur_worker}" >NUL')
+    if new_casa is not None:
+        lines.append(f'move /Y "{new_casa}" "{cur_casa}" >NUL')
     lines += [
         "rem --- relaunch ---",
         f'start "" "{cur_main}"',
@@ -191,9 +196,15 @@ def _check_for_update(blocking_apply: bool = True):
             new_worker = tmp / _ASSET_WORKER
             _download(a_worker["browser_download_url"], new_worker)
 
+        new_casa = None
+        a_casa = assets.get(_ASSET_CASA)
+        if a_casa:
+            new_casa = tmp / _ASSET_CASA
+            _download(a_casa["browser_download_url"], new_casa)
+
         if blocking_apply:
             _set_update_status(state="updating", detail="relaunching")
-            _apply_update_and_relaunch(new_main, new_worker)
+            _apply_update_and_relaunch(new_main, new_worker, new_casa)
     except Exception as e:
         _set_update_status(state="error", detail=repr(e))
 
@@ -1238,6 +1249,157 @@ class Api:
     def update_status(self):
         with _update_lock:
             return dict(_update_status)
+
+    # ----- shared Casa Updater config (same config.json the app uses) -----
+    def _casa_config_path(self):
+        return APP_DIR / "config.json"
+
+    def casa_get_config(self):
+        """Read the subset of Casa config the card exposes. Reads the same
+        config.json the Casa app reads, so the two stay in sync."""
+        try:
+            p = self._casa_config_path()
+            c = json.loads(p.read_text()) if p.exists() else {}
+        except Exception:
+            c = {}
+        return {
+            "sheet_url":        c.get("sheet_url", ""),
+            "draw_sheet_name":  c.get("draw_sheet_name", "Draw"),
+            "output_xlsx":      c.get("output_xlsx", ""),
+            "fci_api_key":      c.get("fci_api_key", ""),
+            "fci_auto":         bool(c.get("fci_auto", True)),
+            "fci_overwrite":    bool(c.get("fci_overwrite", False)),
+            "chrome_headless":  bool(c.get("chrome_headless", False)),
+            "today_sheet_name": c.get("today_sheet_name", ""),
+        }
+
+    def casa_set_config(self, d):
+        """Merge card-edited fields into config.json (preserving other keys)."""
+        d = d or {}
+        try:
+            p = self._casa_config_path()
+            c = json.loads(p.read_text()) if p.exists() else {}
+            for k in ("sheet_url", "draw_sheet_name", "output_xlsx",
+                      "fci_api_key", "today_sheet_name"):
+                if k in d:
+                    c[k] = (d.get(k) or "").strip()
+            if "fci_overwrite" in d:
+                v = d["fci_overwrite"]
+                if isinstance(v, str):
+                    c["fci_overwrite"] = v.strip().lower() in ("true", "1", "yes", "on")
+                else:
+                    c["fci_overwrite"] = bool(v)
+            if "fci_auto" in d:
+                v = d["fci_auto"]
+                if isinstance(v, str):
+                    c["fci_auto"] = v.strip().lower() in ("true", "1", "yes", "on")
+                else:
+                    c["fci_auto"] = bool(v)
+            if "chrome_headless" in d:
+                v = d["chrome_headless"]
+                if isinstance(v, str):
+                    c["chrome_headless"] = v.strip().lower() in ("true", "1", "yes", "on")
+                else:
+                    c["chrome_headless"] = bool(v)
+            p.write_text(json.dumps(c, indent=2))
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def casa_browse_output(self):
+        """SAVE dialog for the Casa output .xlsx; writes the chosen path into
+        the shared config.json so the Casa app picks it up."""
+        if not self._window:
+            return {"error": "no window"}
+        try:
+            c = self.casa_get_config()
+            initial = (c.get("output_xlsx") or "balance_update.xlsx")
+            r = self._window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=os.path.basename(initial),
+                file_types=("Excel workbook (*.xlsx)", "All files (*.*)"))
+            path = r if isinstance(r, str) else (r[0] if r else None)
+            if not path:
+                return {"ok": False}
+            self.casa_set_config({"output_xlsx": path})
+            return {"ok": True, "path": path}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def casa_open_excel(self):
+        try:
+            c = self.casa_get_config()
+            out = (c.get("output_xlsx") or "").strip()
+            if not out:
+                return {"error": "No output file set yet â€” set it in settings."}
+            out = os.path.normpath(out)
+            if not os.path.exists(out):
+                # File not created yet (no Save run). Open the folder instead
+                # so the user can still get there.
+                folder = os.path.dirname(out)
+                if os.path.isdir(folder):
+                    self._open_path(folder)
+                    return {"ok": True, "note": "No Excel file yet â€” opened its folder."}
+                return {"error": "Output file doesn't exist yet â€” run a Save first."}
+            self._open_path(out)
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def casa_open_folder(self):
+        try:
+            c = self.casa_get_config()
+            out = (c.get("output_xlsx") or "").strip()
+            folder = os.path.dirname(os.path.normpath(out)) if out else str(APP_DIR)
+            if not folder or not os.path.isdir(folder):
+                folder = str(APP_DIR)
+            self._open_path(folder)
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _open_path(self, path):
+        """Open a file or folder in the OS default handler."""
+        path = os.path.normpath(path)
+        if os.name == "nt":
+            os.startfile(path)  # noqa
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+
+    # ----- launch the Casa Updater companion app (its own window) -----
+    def launch_casa_updater(self):
+        """Spawn casa-updater.exe (frozen) or casa_main.py (dev), detached so
+        it runs as its own window alongside Draw Manager."""
+        try:
+            if getattr(sys, "frozen", False):
+                exe = APP_DIR / "casa-updater.exe"
+                if not exe.exists():
+                    return {"error": f"casa-updater.exe not found next to {APP_DIR}"}
+                cmd = [str(exe)]
+            else:
+                s = _load_settings()
+                script = Path(s.get("scriptDir", str(APP_DIR))) / "casa_main.py"
+                if not script.exists():
+                    return {"error": f"casa_main.py not found at {script}"}
+                # Prefer pythonw.exe (no console window) over python.exe in dev.
+                py = PYTHON
+                if os.name == "nt":
+                    cand = Path(PYTHON).with_name("pythonw.exe")
+                    if cand.exists():
+                        py = str(cand)
+                cmd = [py, str(script)]
+            flags = 0
+            if os.name == "nt":
+                # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                # â€” independent, and no console window pops up.
+                flags = 0x00000008 | 0x00000200 | 0x08000000
+            subprocess.Popen(cmd, cwd=str(APP_DIR), creationflags=flags,
+                             close_fds=True)
+            return {"ok": True, "launched": "casa-updater"}
+        except Exception as e:
+            return {"error": str(e)}
 
     # ----- window controls -----
     def win_minimize(self):

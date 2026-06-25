@@ -28,3 +28,14 @@ cf_extract_failed*.png
 
 # ---- auto-updater runtime artifact ----
 _dm_update.bat
+
+# ---- installer build output ----
+installer/installer_output/
+
+# ---- Casa Updater secrets / runtime ----
+config.json
+credentials.json
+token.json
+chrome-profile/
+fci_debug/
+balance_update*.xlsx

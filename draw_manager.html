@@ -2402,6 +2402,33 @@ const SCRIPTS = [
       return api().run_draw_request(d.address);
     }
   },
+  {
+    id: 'SCR-002', slug: 'casa-updater',
+    name: 'Casa Balance Updater',
+    desc: 'Pulls properties from Google Sheets and PDFs, looks up loan + account numbers in FCI, and appends them to your balance-update Excel file.',
+    statusText: 'READY',
+    fields: [],
+    settingFields: [
+      { id:'sheet_url',       label:'Google Sheet URL', type:'text', placeholder:'https://docs.google.com/spreadsheets/…' },
+      { id:'draw_sheet_name', label:'Draw sheet name',  type:'text', placeholder:'Draw', help:'Tab used to look up CF#.' },
+      { id:'output_xlsx',     label:'Output .xlsx',      type:'file', pickKind:'casa_output', placeholder:'C:\\…\\balance_update.xlsx' },
+      { id:'fci_api_key',     label:'FCI API key',       type:'text', placeholder:'••••••••' },
+      { id:'fci_auto',        label:'Auto FCI lookup',   type:'select', options:[
+          {value:'true',  label:'On — try the FCI API first'},
+          {value:'false', label:'Off — manual entry only'}],
+        help:'When on, resolves loan/account numbers via the FCI API before asking you.' },
+      { id:'fci_overwrite',   label:'Overwrite previous Excel values', type:'select', options:[
+          {value:'false', label:'Off — only fill in missing numbers'},
+          {value:'true',  label:'On — re-fetch and overwrite existing numbers'}],
+        help:'When on, FCI re-looks up every property and overwrites whatever is already in the .xlsx. Turn off after running.' },
+      { id:'chrome_headless', label:'Run Chrome headless', type:'select', options:[
+          {value:'false', label:'Off — visible window (recommended)'},
+          {value:'true',  label:'On — hidden window'}],
+        help:'Hides the Chrome window. WARNING: FCI / Google sign-in often fails headless; only use if your profile is already logged in and stays valid.' },
+    ],
+    launches: true,            // opens its own window instead of streaming output
+    run: async () => api().launch_casa_updater()
+  },
 ];
 function scriptCardHTML(s) {
   return `
@@ -2444,7 +2471,15 @@ let _pendingDrawId = null;      // set by runDrawRequestForDraw before openPanel
 async function openPanel(s, prefill) {
   activeScript = s; activeTaskId = null;
   clearInterval(pollTimer);
-  scriptSettings = (await api().get_script_settings(s.slug)) || {};
+  if (s.slug === 'casa-updater') {
+    scriptSettings = (await api().casa_get_config()) || {};
+    // select options are strings; normalize the bool for preselection
+    scriptSettings.fci_auto = (scriptSettings.fci_auto ? 'true' : 'false');
+    scriptSettings.fci_overwrite = (scriptSettings.fci_overwrite ? 'true' : 'false');
+    scriptSettings.chrome_headless = (scriptSettings.chrome_headless ? 'true' : 'false');
+  } else {
+    scriptSettings = (await api().get_script_settings(s.slug)) || {};
+  }
   panelTitle.textContent = s.name;
   panelEye.textContent   = `Script · ${s.id}`;
   panelNote.textContent  = 'Idle'; panelNote.className = 'panel-foot-note';
@@ -2587,6 +2622,38 @@ function renderRunForm() {
   const link = document.getElementById('defaults-edit-link');
   if (link) link.onclick = () => setPanelMode('settings');
   injectLoanImport();
+  injectCasaButtons();
+}
+function injectCasaButtons() {
+  if (!activeScript || activeScript.slug !== 'casa-updater') return;
+  const slot = document.getElementById('terminal-slot');
+  if (!slot) return;
+  const block = document.createElement('div');
+  block.style.cssText = 'padding:14px 0; border-top:1px solid var(--line-faint); margin-top:4px;';
+  block.innerHTML = `
+    <div style="font-family:var(--f-mono); font-size:11px; color:var(--ink-3); line-height:1.7; margin-bottom:9px;">
+      Run opens the Balance Updater in its own window.
+      Sheet, output and FCI key live under
+      <span style="color:var(--ink);">settings</span> (gear, top-right).</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn ghost small" id="casa-open-xlsx" type="button">Open Excel</button>
+      <button class="btn ghost small" id="casa-open-folder" type="button">Open folder</button>
+    </div>
+    <div class="test-result" id="casa-btn-result" style="margin-top:8px; display:none;"></div>`;
+  slot.parentNode.insertBefore(block, slot);
+  const res = document.getElementById('casa-btn-result');
+  const show = (msg, err) => { res.style.display='block';
+    res.className = 'test-result' + (err ? ' err' : ' ok'); res.textContent = msg; };
+  document.getElementById('casa-open-xlsx').onclick = async () => {
+    const r = await api().casa_open_excel();
+    if (r && r.error) show(r.error, true);
+    else if (r && r.note) show(r.note, false);
+    else res.style.display='none';
+  };
+  document.getElementById('casa-open-folder').onclick = async () => {
+    const r = await api().casa_open_folder();
+    if (r && r.error) show(r.error, true); else res.style.display='none';
+  };
 }
 function renderSettingsForm() {
   const s = activeScript;
@@ -2616,7 +2683,14 @@ function renderSettingsForm() {
     }).join('');
   panelBody.querySelectorAll('[data-sf-browse]').forEach(btn => {
     btn.onclick = async () => {
-      const path = await api().pick_file(btn.dataset.pick || 'csv');
+      const kind = btn.dataset.pick || 'csv';
+      let path;
+      if (kind === 'casa_output') {
+        const r = await api().casa_browse_output();
+        path = (r && r.ok) ? r.path : null;
+      } else {
+        path = await api().pick_file(kind);
+      }
       if (path && typeof path === 'string') {
         const target = panelBody.querySelector(`[data-sfid="${btn.dataset.sfBrowse}"]`);
         if (target) target.value = path;
@@ -2648,8 +2722,15 @@ panelRun.onclick = async () => {
     // SAVE script settings
     const inputs = panelBody.querySelectorAll('[data-sfid]');
     const newVals = {};
-    inputs.forEach(i => { newVals[i.dataset.sfid] = i.value; });
-    scriptSettings = await api().save_script_settings(activeScript.slug, newVals);
+    inputs.forEach(i => {
+      newVals[i.dataset.sfid] = (i.type === 'checkbox') ? i.checked : i.value;
+    });
+    if (activeScript.slug === 'casa-updater') {
+      await api().casa_set_config(newVals);
+      scriptSettings = (await api().casa_get_config()) || {};
+    } else {
+      scriptSettings = await api().save_script_settings(activeScript.slug, newVals);
+    }
     toast('Defaults saved');
     setPanelMode('run');
     return;
@@ -2703,6 +2784,29 @@ panelRun.onclick = async () => {
     if (req && !i.value.trim()) { missing = true; i.style.borderColor = 'var(--red)'; }
   });
   if (missing) { toast('Fill required fields'); return; }
+
+  // Launch-type scripts (e.g. Casa Updater) open their own window instead of
+  // streaming subprocess output into the panel terminal.
+  if (activeScript.launches) {
+    panelRun.disabled = true; panelRun.textContent = 'Opening…';
+    let r;
+    try { r = await activeScript.run(data); }
+    catch (e) {
+      toast('Launch failed: ' + e.message);
+      panelRun.disabled = false; panelRun.textContent = 'Run';
+      return;
+    }
+    if (r && r.error) {
+      toast('Launch failed: ' + r.error);
+      panelRun.disabled = false; panelRun.textContent = 'Run';
+      return;
+    }
+    toast(activeScript.name + ' opened');
+    panelRun.disabled = false; panelRun.textContent = 'Run';
+    closePanel();
+    return;
+  }
+
   panelRun.disabled = true; panelRun.textContent = 'Running…';
   panelNote.textContent = 'Spawning subprocess…';
   panelNote.className = 'panel-foot-note busy';

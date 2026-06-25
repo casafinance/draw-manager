@@ -48,6 +48,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 ; The two exes and icon are copied from the build output (dist) at build time.
 Source: "..\dist\{#MyMainExe}";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\{#MyWorkerExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\casa-updater.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\draw_manager.ico";    DestDir: "{app}"; Flags: ignoreversion
 ; The user-selected credentials file is copied at runtime in [Code] (see
 ; CurStepChanged), because its source path is chosen on the wizard page.

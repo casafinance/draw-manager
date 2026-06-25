@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Casa Balance Updater</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@100;200;300;400;700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper:#D8E4EF; --paper-2:#C7D6E3; --paper-3:#B5C7D7; --white:#F1F6FB;
+    --line:#5E7B97; --line-soft:#95ACC1; --line-faint:#B6C5D4;
+    --ink:#0A1A2E; --ink-2:#1E3556; --ink-3:#4A6585;
+    --red:#C8362D; --red-2:#9E261E; --red-soft:rgba(200,54,45,.10);
+    --ok:#2E6E3C; --warn:#B25500;
+    --f-disp:'Big Shoulders Display',sans-serif;
+    --f-body:'Geist',system-ui,sans-serif;
+    --f-mono:'Geist Mono',ui-monospace,monospace;
+    --t-fast:120ms cubic-bezier(.4,0,.2,1);
+    --t-med:260ms cubic-bezier(.4,0,.2,1);
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body {
+    font-family:var(--f-body); font-weight:450; font-size:14px;
+    line-height:1.5; color:var(--ink); background:var(--paper);
+    background-image:
+      linear-gradient(rgba(94,123,151,.18) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(94,123,151,.18) 1px,transparent 1px),
+      linear-gradient(rgba(94,123,151,.07) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(94,123,151,.07) 1px,transparent 1px);
+    background-size:96px 96px,96px 96px,16px 16px,16px 16px;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  /* ---- header ---- */
+  header {
+    display:flex; align-items:baseline; gap:14px;
+    padding:14px 20px 12px; border-bottom:1.5px solid var(--line);
+    background:var(--white);
+  }
+  .logo-step { display:inline-flex; align-items:flex-end; gap:2px; height:18px; }
+  .logo-step span { width:3px; background:var(--ink); }
+  .logo-step span:nth-child(1){height:25%;} .logo-step span:nth-child(2){height:45%;}
+  .logo-step span:nth-child(3){height:65%;} .logo-step span:nth-child(4){height:85%;}
+  .logo-step span:nth-child(5){height:100%;background:var(--red);}
+  h1 {
+    font-family:var(--f-disp); font-weight:400; font-size:26px;
+    letter-spacing:.04em; text-transform:uppercase; line-height:1;
+  }
+  .eyebrow {
+    font-family:var(--f-mono); font-size:10px; font-weight:600;
+    letter-spacing:.2em; text-transform:uppercase; color:var(--ink-3);
+  }
+  .header-spacer { flex:1; }
+  /* ---- layout ---- */
+  main { flex:1; display:flex; min-height:0; }
+  .col-left { width:300px; border-right:1.5px solid var(--line);
+    background:rgba(241,246,251,.55); padding:16px; overflow-y:auto; }
+  .col-main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  /* ---- section label ---- */
+  .sec {
+    font-family:var(--f-mono); font-size:10px; font-weight:600;
+    letter-spacing:.2em; text-transform:uppercase; color:var(--ink-3);
+    margin:0 0 8px; padding-bottom:4px; border-bottom:1px solid var(--line-faint);
+  }
+  .sec:not(:first-child){ margin-top:20px; }
+  /* ---- fields ---- */
+  label.fld { display:block; margin-bottom:10px; }
+  label.fld .lk {
+    display:block; font-family:var(--f-mono); font-size:10px; font-weight:600;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2);
+    margin-bottom:3px;
+  }
+  input[type=text],input[type=password],select {
+    all:unset; box-sizing:border-box; width:100%; padding:7px 9px;
+    font-family:var(--f-mono); font-size:12px; color:var(--ink);
+    background:var(--white); border:1px solid var(--line-soft);
+    transition:border-color var(--t-fast);
+  }
+  input:focus,select:focus { border-color:var(--ink); }
+  select { cursor:pointer; }
+  .row2 { display:flex; gap:8px; }
+  .chk { display:flex; align-items:center; gap:7px; font-size:12px;
+    font-family:var(--f-mono); color:var(--ink-2); cursor:pointer; margin-top:4px; }
+  .chk input { width:14px; height:14px; accent-color:var(--ink); }
+  /* ---- buttons ---- */
+  .btn {
+    all:unset; cursor:pointer; padding:9px 16px; font-family:var(--f-mono);
+    font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.12em;
+    background:var(--ink); color:var(--white); transition:all var(--t-fast);
+    display:inline-flex; align-items:center; gap:7px; justify-content:center;
+    border:1px solid var(--ink);
+  }
+  .btn:hover { background:var(--ink-2); }
+  .btn:active { transform:translateY(1px); }
+  .btn.ghost { background:transparent; color:var(--ink); }
+  .btn.ghost:hover { background:var(--ink); color:var(--white); }
+  .btn.red { background:var(--red); border-color:var(--red); }
+  .btn.red:hover { background:var(--red-2); }
+  .btn.sm { padding:6px 11px; font-size:10px; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-row { display:flex; gap:7px; flex-wrap:wrap; }
+  /* numbered step buttons */
+  .steps { display:flex; gap:7px; padding:12px 16px; border-bottom:1.5px solid var(--line);
+    background:var(--white); flex-wrap:wrap; align-items:center; }
+  .step-btn { position:relative; }
+  .step-n { font-family:var(--f-mono); font-size:9px; opacity:.6; margin-right:5px; }
+  .steps .spacer { flex:1; }
+  /* ---- list (tabs / pdfs) ---- */
+  .picklist { border:1px solid var(--line-soft); background:var(--white);
+    max-height:120px; overflow-y:auto; margin-bottom:6px; }
+  .picklist .item {
+    padding:5px 9px; font-family:var(--f-mono); font-size:11px;
+    border-bottom:1px solid var(--line-faint); cursor:pointer;
+    display:flex; align-items:center; gap:7px;
+  }
+  .picklist .item:last-child { border-bottom:none; }
+  .picklist .item:hover { background:var(--paper-2); }
+  .picklist .item.on { background:var(--ink); color:var(--white); }
+  .picklist .empty { padding:9px; font-size:11px; color:var(--ink-3); font-style:italic; }
+  /* ---- preview table ---- */
+  .table-wrap { flex:1; overflow:auto; border-bottom:1.5px solid var(--line); position:relative; }
+  /* Full-height vertical column rules: a repeating gradient placed at each
+     column edge (32,96,416,544,640,752,864,976px). Drawn on an inner layer so
+     the lines run the full height of the scroll area, past the last data row. */
+  .table-wrap table { position:relative; z-index:1; }
+  .table-wrap::before {
+    content:""; position:absolute; top:0; left:0; width:976px; bottom:0;
+    pointer-events:none; z-index:0;
+    background-image:
+      linear-gradient(rgba(94,123,151,.10) 1px, transparent 1px),
+      linear-gradient(90deg,
+        transparent 31px, rgba(94,123,151,.22) 31px, rgba(94,123,151,.22) 32px,
+        transparent 32px, transparent 95px, rgba(94,123,151,.22) 95px, rgba(94,123,151,.22) 96px,
+        transparent 96px, transparent 415px, rgba(94,123,151,.22) 415px, rgba(94,123,151,.22) 416px,
+        transparent 416px, transparent 543px, rgba(94,123,151,.22) 543px, rgba(94,123,151,.22) 544px,
+        transparent 544px, transparent 639px, rgba(94,123,151,.22) 639px, rgba(94,123,151,.22) 640px,
+        transparent 640px, transparent 751px, rgba(94,123,151,.22) 751px, rgba(94,123,151,.22) 752px,
+        transparent 752px, transparent 863px, rgba(94,123,151,.22) 863px, rgba(94,123,151,.22) 864px,
+        transparent 864px, transparent 975px, rgba(94,123,151,.22) 975px, rgba(94,123,151,.22) 976px,
+        transparent 976px);
+    background-size:16px 16px, 976px 100%;
+    background-repeat:repeat, no-repeat;
+  }
+  table { width:976px; border-collapse:collapse; font-size:12px; table-layout:fixed; background:transparent; }
+  thead th {
+    position:sticky; top:0; background:var(--paper-2); text-align:left;
+    font-family:var(--f-mono); font-size:9px; font-weight:600; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--ink-2); padding:7px 9px; height:32px;
+    border-right:1px solid var(--line-faint); z-index:2;
+    border-bottom:1.5px solid var(--line); white-space:nowrap; }
+  tbody td { padding:5px 9px; border-bottom:1px solid var(--line-faint);
+    font-family:var(--f-mono); font-size:11px; vertical-align:top;
+    height:32px; overflow:hidden; text-overflow:ellipsis; background:transparent; }
+  tbody tr:hover { background:rgba(241,246,251,.7); }
+  td.edit { cursor:text; }
+  td.edit:hover { background:var(--white); outline:1px solid var(--line-soft); }
+  td input { padding:2px 4px; font-size:11px; border-color:var(--ink); }
+  .st { width:18px; text-align:center; }
+  .st.skip { color:var(--ok); } .st.done { color:var(--ink); } .st.pending { color:var(--warn); }
+  .table-empty { padding:30px; text-align:center; color:var(--ink-3);
+    font-family:var(--f-mono); font-size:12px; }
+  .tip { padding:5px 16px; font-size:11px; color:var(--ink-3);
+    font-family:var(--f-mono); border-bottom:1px solid var(--line-faint); background:var(--white); }
+  /* ---- progress + log ---- */
+  .progress-wrap { padding:8px 16px; background:var(--white);
+    border-bottom:1px solid var(--line-faint); display:flex; align-items:center; gap:12px; }
+  .pbar { flex:1; height:6px; background:var(--paper-3); position:relative; overflow:hidden; }
+  .pbar > div { position:absolute; inset:0 100% 0 0; background:var(--ink);
+    transition:right var(--t-med); }
+  .pstatus { font-family:var(--f-mono); font-size:11px; color:var(--ink-2);
+    min-width:160px; }
+  .log {
+    height:150px; overflow-y:auto; background:var(--ink); color:#C6D6E6;
+    font-family:var(--f-mono); font-size:11px; line-height:1.5; padding:9px 14px;
+    user-select:text; white-space:pre-wrap;
+  }
+  .log .err { color:#F2A097; }
+  /* ---- modal (manual FCI) ---- */
+  .overlay { position:fixed; inset:0; background:rgba(10,26,46,.55);
+    display:none; align-items:center; justify-content:center; z-index:50; }
+  .overlay.open { display:flex; }
+  .modal { width:440px; background:var(--white); border:1.5px solid var(--line);
+    box-shadow:0 20px 60px rgba(10,26,46,.4); }
+  .modal-head { padding:14px 18px; border-bottom:1.5px solid var(--line); }
+  .modal-head .eyebrow { margin-bottom:3px; }
+  .modal-head h2 { font-family:var(--f-disp); font-weight:400; font-size:20px;
+    text-transform:uppercase; letter-spacing:.03em; }
+  .modal-body { padding:16px 18px; }
+  .modal-info { font-family:var(--f-mono); font-size:11px; color:var(--ink-2);
+    background:var(--paper); border:1px solid var(--line-faint); padding:9px 11px;
+    margin-bottom:14px; line-height:1.7; }
+  .modal-info b { color:var(--ink); }
+  .modal-foot { display:flex; gap:8px; padding:14px 18px; border-top:1px solid var(--line-faint);
+    justify-content:flex-end; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+    background:var(--ink); color:var(--white); font-family:var(--f-mono);
+    font-size:11px; letter-spacing:.06em; padding:9px 18px; z-index:80;
+    opacity:0; transition:opacity var(--t-fast); pointer-events:none; }
+  .toast.show { opacity:1; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:var(--line-soft); }
+  ::-webkit-scrollbar-track { background:transparent; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="logo-step"><span></span><span></span><span></span><span></span><span></span></span>
+    <div>
+      <div class="eyebrow">Casa Finance · Automation</div>
+      <h1>Balance Updater</h1>
+    </div>
+    <div class="header-spacer"></div>
+    <div class="eyebrow" id="ready">READY</div>
+  </header>
+
+  <div class="steps">
+    <button class="btn ghost step-btn" id="b-chrome"><span class="step-n">01</span>Launch Chrome</button>
+    <button class="btn ghost step-btn" id="b-pull"><span class="step-n">02</span>Pull / Parse</button>
+    <button class="btn ghost step-btn" id="b-fci"><span class="step-n">03</span>FCI Lookup</button>
+    <button class="btn ghost step-btn" id="b-save"><span class="step-n">04</span>Save to Excel</button>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="b-openxlsx">Open Excel</button>
+    <button class="btn red" id="b-runall">▶ Run everything</button>
+  </div>
+
+  <main>
+    <!-- LEFT: config + sources -->
+    <div class="col-left">
+      <!-- Config (sheet URL, draw name, output, FCI key) is set in the
+           Draw Manager card settings. These hidden inputs keep the existing
+           config sync code working; they're populated from config.json on
+           load and are not shown. -->
+      <input type="hidden" id="f-sheet">
+      <input type="hidden" id="f-draw">
+      <input type="hidden" id="f-out">
+      <input type="hidden" id="f-key">
+
+      <div class="sec">Connections</div>
+      <div style="font-family:var(--f-mono); font-size:10.5px; color:var(--ink-3); line-height:1.7; margin-bottom:10px;">
+        Sheet, output file and FCI key are configured in
+        <span style="color:var(--ink);">Draw Manager → Scripts → Casa Balance Updater → settings.</span>
+        Sign in once below.</div>
+      <div class="btn-row">
+        <button class="btn ghost sm" id="b-testapi">Test API</button>
+        <button class="btn ghost sm" id="b-google">Sign in to Google</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="f-auto" checked> Auto FCI lookup (API first)</label>
+
+      <div class="sec">Sheet tabs</div>
+      <button class="btn ghost sm" id="b-detect" style="margin-bottom:6px;">Detect tabs</button>
+      <div class="picklist" id="tablist"><div class="empty">No tabs detected yet.</div></div>
+      <label class="fld"><span class="lk">…or type tab(s), comma-separated</span>
+        <input type="text" id="f-tabs" placeholder="06/18, 06/03"></label>
+
+      <div class="sec">PDFs</div>
+      <button class="btn ghost sm" id="b-addpdf" style="margin-bottom:6px;">Add PDF(s)…</button>
+      <div class="picklist" id="pdflist"><div class="empty">No PDFs queued.</div></div>
+    </div>
+
+    <!-- MAIN: preview + progress + log -->
+    <div class="col-main">
+      <div class="tip">Double-click Address · Amount · CF · Loan · Acct · Date to edit before saving.</div>
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width:32px"><col style="width:64px"><col style="width:320px">
+            <col style="width:128px"><col style="width:96px"><col style="width:112px">
+            <col style="width:112px"><col style="width:112px">
+          </colgroup>
+          <thead><tr>
+            <th class="st">✓</th><th>Draw#</th><th>Address</th><th>Amount</th>
+            <th>CF #</th><th>Loan #</th><th>Acct #</th><th>Date</th>
+          </tr></thead>
+          <tbody id="rows"><tr><td colspan="8" class="table-empty">Pull or parse a source to populate properties.</td></tr></tbody>
+        </table>
+      </div>
+      <div class="progress-wrap">
+        <div class="pstatus" id="pstatus">Ready.</div>
+        <div class="pbar"><div id="pbar"></div></div>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+  </main>
+
+  <!-- Manual FCI modal -->
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="eyebrow">FCI · Manual entry</div>
+        <h2 id="m-addr">Property</h2>
+      </div>
+      <div class="modal-body">
+        <div class="modal-info" id="m-info"></div>
+        <label class="fld"><span class="lk">Loan #</span><input type="text" id="m-loan"></label>
+        <label class="fld"><span class="lk">Investor Account #</span><input type="text" id="m-acct"></label>
+        <label class="fld"><span class="lk">Date received (optional)</span><input type="text" id="m-date" placeholder="m/d/yyyy"></label>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="m-stop">Stop</button>
+        <button class="btn ghost" id="m-skip">Skip</button>
+        <button class="btn" id="m-save">Save &amp; next</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let API = null, selectedTabs = [], busy = false;
+
+  function api() {
+    if (API) return API;
+    if (window.pywebview && window.pywebview.api) { API = window.pywebview.api; return API; }
+    return null;
+  }
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2200);
+  }
+  function logLine(line, isErr) {
+    const el = $('log');
+    const div = document.createElement('div');
+    if (isErr) div.className = 'err';
+    div.textContent = line;
+    el.appendChild(div); el.scrollTop = el.scrollHeight;
+  }
+  function setProgress(pct, text) {
+    $('pbar').style.right = (100 - (pct || 0)) + '%';
+    if (text) $('pstatus').textContent = text;
+  }
+  function setBusy(b) {
+    busy = b;
+    $('ready').textContent = b ? 'WORKING…' : 'READY';
+    ['b-chrome','b-pull','b-fci','b-save','b-runall','b-detect','b-testapi','b-google']
+      .forEach(id => { const e = $(id); if (e) e.disabled = b; });
+  }
+
+  // ---- config load/save ----
+  async function loadConfig() {
+    const a = api(); if (!a) return;
+    const c = await a.get_config();
+    $('f-sheet').value = c.sheet_url || '';
+    $('f-draw').value  = c.draw_sheet_name || 'Draw';
+    $('f-out').value   = c.output_xlsx || '';
+    $('f-key').value   = c.fci_api_key || '';
+    $('f-auto').checked = !!c.fci_auto;
+    $('f-tabs').value  = c.today_sheet_name || '';
+    if (c.tabs && c.tabs.length) renderTabs(c.tabs, c.tabs);
+    if (c.pdfs) renderPdfs(c.pdfs);
+  }
+  function gatherConfig() {
+    return {
+      sheet_url: $('f-sheet').value,
+      draw_sheet_name: $('f-draw').value,
+      output_xlsx: $('f-out').value,
+      fci_api_key: $('f-key').value,
+      fci_auto: $('f-auto').checked,
+      today_sheet_name: $('f-tabs').value,
+    };
+  }
+  async function saveConfig() {
+    const a = api(); if (!a) return;
+    await a.set_config(gatherConfig());
+  }
+  // persist on change
+  ['f-sheet','f-draw','f-out','f-key','f-tabs'].forEach(id =>
+    $(id).addEventListener('change', saveConfig));
+  $('f-auto').addEventListener('change', saveConfig);
+
+  // ---- tab + pdf lists ----
+  function renderTabs(tabs, selected) {
+    selectedTabs = selected ? selected.slice() : [];
+    const box = $('tablist');
+    if (!tabs || !tabs.length) { box.innerHTML = '<div class="empty">No tabs detected yet.</div>'; return; }
+    box.innerHTML = '';
+    tabs.forEach(t => {
+      const d = document.createElement('div');
+      d.className = 'item' + (selectedTabs.includes(t) ? ' on' : '');
+      d.textContent = t;
+      d.onclick = () => {
+        const i = selectedTabs.indexOf(t);
+        if (i >= 0) { selectedTabs.splice(i,1); d.classList.remove('on'); }
+        else { selectedTabs.push(t); d.classList.add('on'); }
+      };
+      box.appendChild(d);
+    });
+  }
+  function renderPdfs(pdfs) {
+    const box = $('pdflist');
+    if (!pdfs || !pdfs.length) { box.innerHTML = '<div class="empty">No PDFs queued.</div>'; return; }
+    box.innerHTML = '';
+    pdfs.forEach((name, i) => {
+      const d = document.createElement('div');
+      d.className = 'item';
+      d.innerHTML = `<span style="flex:1">${name}</span>`;
+      const x = document.createElement('button');
+      x.className = 'btn red sm'; x.textContent = '✕';
+      x.onclick = async (e) => { e.stopPropagation();
+        const r = await api().remove_pdf(i); if (r && r.ok) renderPdfs(r.pdfs); };
+      d.appendChild(x); box.appendChild(d);
+    });
+  }
+
+  // ---- preview table ----
+  const EDITABLE = ['address','amount','cf','loan','acct','date'];
+  const COLS = ['status','draw','address','amount','cf','loan','acct','date'];
+  async function refreshTable() {
+    const a = api(); if (!a) return;
+    const rows = await a.get_properties();
+    const tb = $('rows');
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="8" class="table-empty">Pull or parse a source to populate properties.</td></tr>';
+      return;
+    }
+    tb.innerHTML = '';
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      const sym = r.status === 'skip' ? '✓' : (r.status === 'done' ? '●' : '…');
+      tr.innerHTML =
+        `<td class="st ${r.status}">${sym}</td>` +
+        `<td>${r.draw}</td>` +
+        `<td class="edit" data-c="address">${esc(r.address)}</td>` +
+        `<td class="edit" data-c="amount">${esc(r.amount)}</td>` +
+        `<td class="edit" data-c="cf">${esc(r.cf)}</td>` +
+        `<td class="edit" data-c="loan">${esc(r.loan)}</td>` +
+        `<td class="edit" data-c="acct">${esc(r.acct)}</td>` +
+        `<td class="edit" data-c="date">${esc(r.date)}</td>`;
+      tr.querySelectorAll('td.edit').forEach(td =>
+        td.addEventListener('dblclick', () => editCell(td, r.i)));
+      tb.appendChild(tr);
+    });
+  }
+  function esc(s){ return (s==null?'':String(s)).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function editCell(td, idx) {
+    const col = td.dataset.c, old = td.textContent;
+    const inp = document.createElement('input'); inp.type='text'; inp.value=old;
+    td.textContent=''; td.appendChild(inp); inp.focus(); inp.select();
+    const commit = async () => {
+      const v = inp.value;
+      await api().edit_cell(idx, col, v);
+      refreshTable();
+    };
+    inp.addEventListener('keydown', e => {
+      if (e.key==='Enter') commit();
+      if (e.key==='Escape') refreshTable();
+    });
+    inp.addEventListener('blur', commit);
+  }
+
+  // ---- manual FCI modal ----
+  let manualOpen = false;
+  function showManual(m) {
+    if (manualOpen) return;
+    manualOpen = true;
+    $('m-addr').textContent = m.address || 'Property';
+    $('m-info').innerHTML =
+      `Draw <b>${esc(m.draw||'—')}</b> · Amount <b>${esc(m.amount||'—')}</b> · ` +
+      `CF <b>${esc(m.cf||'—')}</b> · Date <b>${esc(m.date||'—')}</b><br>` +
+      `Search this property in the Chrome window, then paste the two numbers.`;
+    $('m-loan').value=''; $('m-acct').value=''; $('m-date').value='';
+    $('overlay').classList.add('open');
+    setTimeout(()=>$('m-loan').focus(), 80);
+  }
+  async function answerManual(action) {
+    const payload = { action,
+      loan: $('m-loan').value.trim(),
+      acct: $('m-acct').value.trim(),
+      date: $('m-date').value.trim() };
+    $('overlay').classList.remove('open');
+    manualOpen = false;
+    await api().submit_manual(payload);
+  }
+  $('m-save').onclick = () => answerManual('save');
+  $('m-skip').onclick = () => answerManual('skip');
+  $('m-stop').onclick = () => answerManual('stop');
+
+  // ---- event poll ----
+  async function poll() {
+    const a = api(); if (!a) return;
+    try {
+      const ev = await a.get_events();
+      (ev.events||[]).forEach(e => {
+        if (e.kind==='log') logLine(e.line);
+        else if (e.kind==='error') logLine('ERROR: '+e.message, true);
+        else if (e.kind==='status') $('pstatus').textContent = e.text;
+        else if (e.kind==='progress') setProgress(e.pct, e.text);
+        else if (e.kind==='refresh') refreshTable();
+        else if (e.kind==='tabs') renderTabs(e.tabs, e.selected);
+        else if (e.kind==='saved') toast('Saved: '+(e.files||[]).join(', '));
+        else if (e.kind==='manual_prompt') { /* handled via ev.manual below */ }
+      });
+      setBusy(!!ev.busy);
+      if (ev.manual) showManual(ev.manual);
+    } catch (err) { /* ignore transient */ }
+  }
+  setInterval(poll, 250);
+
+  // ---- step actions ----
+  async function guard(fn) {
+    await saveConfig();
+    const a = api(); if (!a) { toast('Not connected yet'); return; }
+    await fn(a);
+  }
+  $('b-chrome').onclick  = () => guard(a => a.launch_chrome());
+  $('b-pull').onclick    = () => guard(a => a.pull(selectedTabs));
+  $('b-fci').onclick     = () => guard(a => a.fci());
+  $('b-save').onclick    = () => guard(a => a.save());
+  $('b-runall').onclick  = () => guard(a => a.run_all(selectedTabs));
+  $('b-detect').onclick  = () => guard(a => a.detect_tabs());
+  $('b-testapi').onclick = () => guard(a => a.test_api($('f-key').value));
+  $('b-google').onclick  = () => guard(a => a.google_signin());
+  $('b-addpdf').onclick  = async () => { const r = await api().add_pdfs(); if (r&&r.ok) renderPdfs(r.pdfs); };
+  $('b-openxlsx').onclick = async () => { const r = await api().open_excel(); if (r&&r.error) toast(r.error); };
+
+  // ---- boot ----
+  function boot() {
+    if (!api()) { setTimeout(boot, 120); return; }
+    loadConfig().then(() => {
+      refreshTable();
+      // Auto-detect tabs on open if a sheet URL is configured.
+      if (($('f-sheet').value || '').trim()) {
+        api().detect_tabs();
+      }
+    });
+  }
+  window.addEventListener('pywebviewready', boot);
+  boot();
+</script>
+</body>
+</html>

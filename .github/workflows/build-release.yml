@@ -63,6 +63,8 @@ jobs:
           python -m pip install --upgrade pip
           # Core runtime deps. Adjust if you add libraries to the app.
           pip install pywebview google-api-python-client google-auth google-auth-httplib2 openpyxl playwright pyinstaller
+          # Casa Balance Updater deps (second app bundled into the release).
+          pip install selenium google-auth-oauthlib PyMuPDF pytesseract pillow requests
           # If you keep a requirements.txt, prefer:
           #   if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
@@ -76,12 +78,18 @@ jobs:
         shell: pwsh
         run: pyinstaller --clean --noconfirm "draw-request.spec"
 
-      - name: Verify both exes exist
+      - name: Build casa-updater.exe
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: pyinstaller --clean --noconfirm "casa-updater.spec"
+
+      - name: Verify all exes exist
         if: steps.exists.outputs.skip == 'false'
         shell: pwsh
         run: |
           if (-not (Test-Path "dist/Draw Manager.exe")) { Write-Error "Missing dist/Draw Manager.exe"; exit 1 }
           if (-not (Test-Path "dist/draw-request.exe")) { Write-Error "Missing dist/draw-request.exe"; exit 1 }
+          if (-not (Test-Path "dist/casa-updater.exe")) { Write-Error "Missing dist/casa-updater.exe"; exit 1 }
 
       - name: Build installer (Inno Setup)
         if: steps.exists.outputs.skip == 'false'
@@ -110,5 +118,6 @@ jobs:
             "installer/installer_output/Draw-Manager-Setup.exe" `
             "dist/Draw Manager.exe" `
             "dist/draw-request.exe" `
+            "dist/casa-updater.exe" `
             --title $tag `
             --notes "Automated build of $tag from commit ${{ github.sha }}.`n`nMost users want **Draw-Manager-Setup.exe** (the installer)."
