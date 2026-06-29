@@ -1,5 +1,5 @@
 """
-Draw Manager â€” pywebview app shell.
+Draw Manager Ã¢â‚¬â€ pywebview app shell.
 
 v0.3 additions:
   - Settings restructured into connections{} + scripts{}
@@ -42,7 +42,7 @@ PYTHON        = sys.executable
 # ---------------------------------------------------------------------------
 # Version + auto-update
 # ---------------------------------------------------------------------------
-VERSION = "0.1.3"   # <-- bump this, push to main; CI tags a release v<VERSION>
+VERSION = "0.1.4"   # <-- bump this, push to main; CI tags a release v<VERSION>
 
 # Your GitHub repo, "owner/name". The updater hits the public Releases API.
 # If you rename the repo, change this string (it's the only place it lives).
@@ -247,7 +247,7 @@ STALE_DAYS = {
     "appraisal_received": 2, "email_sent": 3, "approved": 2, "fci_updated": 3,
 }
 
-# Per-draw manual progress flow â€” user drives this from the app.
+# Per-draw manual progress flow Ã¢â‚¬â€ user drives this from the app.
 # Independent of the sheet-derived state (which reflects sheet columns).
 PROGRESS_ORDER = [
     "not_started", "order_inspection", "inspection_received",
@@ -284,7 +284,7 @@ _sync_state = {"counter": 0, "last_error": None}
 _batches: dict[str, dict] = {}
 _batches_lock = threading.Lock()
 
-# Bounded ring buffer of recent errors â€” surfaced to the debug HUD.
+# Bounded ring buffer of recent errors Ã¢â‚¬â€ surfaced to the debug HUD.
 _ERROR_BUF: list[dict] = []
 _ERROR_BUF_MAX = 100
 _err_lock = threading.Lock()
@@ -459,7 +459,7 @@ def _init_db():
             c.execute("""UPDATE loans SET total_draws = (
                             SELECT COUNT(*) FROM draws WHERE draws.loan_id = loans.id
                          ) WHERE total_draws IS NULL""")
-        # Migration: sheet_row_index â€” 1-based row number in the primary sheet
+        # Migration: sheet_row_index Ã¢â‚¬â€ 1-based row number in the primary sheet
         # where this loan's CF# was found. Used for Google Sheets write-back.
         if "sheet_row_index" not in lcols:
             c.execute("ALTER TABLE loans ADD COLUMN sheet_row_index INTEGER")
@@ -475,7 +475,7 @@ _MONEY_RE = re.compile(r"[^\d.\-]")
 def _money(s):
     if s is None: return None
     s = str(s).strip()
-    if not s or s in ("-", "â€”"): return None
+    if not s or s in ("-", "Ã¢â‚¬â€"): return None
     cleaned = _MONEY_RE.sub("", s)
     if not cleaned or cleaned in (".", "-", "-."): return None
     try:
@@ -486,7 +486,7 @@ def _money(s):
 
 def _bool(s):
     if not s: return False
-    return str(s).strip().upper() in ("TRUE", "YES", "Y", "1", "X", "âœ“")
+    return str(s).strip().upper() in ("TRUE", "YES", "Y", "1", "X", "Ã¢Å“â€œ")
 
 def _state_of(d):
     if d["funded_date"]:        return "funded"
@@ -769,7 +769,7 @@ def _read_file_as_tsv(path: str) -> str:
             if n > best_n:
                 best, best_n = tsv, n
         return best
-    # Plain text â€” parse_sheet sniffs tab vs comma itself. utf-8-sig strips BOM.
+    # Plain text Ã¢â‚¬â€ parse_sheet sniffs tab vs comma itself. utf-8-sig strips BOM.
     return Path(path).read_text(encoding="utf-8-sig", errors="replace")
 
 
@@ -856,7 +856,7 @@ PROGRESS_TO_SHEET_FIELDS = {
 
 
 def _col_letter(col_one_based: int) -> str:
-    """1 â†’ A, 26 â†’ Z, 27 â†’ AA, etc. Used to build A1-style cell refs."""
+    """1 Ã¢â€ â€™ A, 26 Ã¢â€ â€™ Z, 27 Ã¢â€ â€™ AA, etc. Used to build A1-style cell refs."""
     s = ""
     n = col_one_based
     while n > 0:
@@ -941,7 +941,7 @@ def _push_progress_to_sheet(loan_row, draw_number, new_progress_state):
 
     row_idx = loan_row["sheet_row_index"] if loan_row else None
     if not row_idx:
-        return {"skipped": "loan has no sheet_row_index â€” run Sync once to populate"}
+        return {"skipped": "loan has no sheet_row_index Ã¢â‚¬â€ run Sync once to populate"}
 
     fields = PROGRESS_TO_SHEET_FIELDS.get(new_progress_state, [])
     if not fields:
@@ -980,7 +980,7 @@ def parse_extra_sheet(tsv):
     if not tsv or not tsv.strip():
         return []
     rows = [line.split("\t") for line in tsv.split("\n")]
-    # Header detection â€” first 12 rows, pick the one with the most non-empty
+    # Header detection Ã¢â‚¬â€ first 12 rows, pick the one with the most non-empty
     # short cells (real headers are short labels, not paragraphs).
     best_idx, best_score = 0, -1
     for i, row in enumerate(rows[:12]):
@@ -1211,7 +1211,7 @@ def _draw_worker_cmd_head(s: dict):
 
 def _build_draw_cmd(s, dr, address, profile_dir, live, csv, headless=False):
     """Assemble the worker command line for one address. Each run gets its own
-    isolated browser profile (its own window) â€” the model that actually works.
+    isolated browser profile (its own window) Ã¢â‚¬â€ the model that actually works.
     Returns (cmd_list, None) or (None, {error})."""
     head, err = _draw_worker_cmd_head(s)
     if err:
@@ -1331,7 +1331,7 @@ class Api:
             c = self.casa_get_config()
             out = (c.get("output_xlsx") or "").strip()
             if not out:
-                return {"error": "No output file set yet â€” set it in settings."}
+                return {"error": "No output file set yet Ã¢â‚¬â€ set it in settings."}
             out = os.path.normpath(out)
             if not os.path.exists(out):
                 # File not created yet (no Save run). Open the folder instead
@@ -1339,8 +1339,8 @@ class Api:
                 folder = os.path.dirname(out)
                 if os.path.isdir(folder):
                     self._open_path(folder)
-                    return {"ok": True, "note": "No Excel file yet â€” opened its folder."}
-                return {"error": "Output file doesn't exist yet â€” run a Save first."}
+                    return {"ok": True, "note": "No Excel file yet Ã¢â‚¬â€ opened its folder."}
+                return {"error": "Output file doesn't exist yet Ã¢â‚¬â€ run a Save first."}
             self._open_path(out)
             return {"ok": True}
         except Exception as e:
@@ -1393,7 +1393,7 @@ class Api:
             flags = 0
             if os.name == "nt":
                 # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-                # â€” independent, and no console window pops up.
+                # Ã¢â‚¬â€ independent, and no console window pops up.
                 flags = 0x00000008 | 0x00000200 | 0x08000000
             subprocess.Popen(cmd, cwd=str(APP_DIR), creationflags=flags,
                              close_fds=True)
@@ -1572,7 +1572,7 @@ class Api:
         Expected columns, in order:
             Draw # | Name | Address | AA | BL | Last 4 | Draw Fee |
             Wire Received | OUT | Going Out | Released On
-        A header row is fine â€” it's skipped automatically."""
+        A header row is fine Ã¢â‚¬â€ it's skipped automatically."""
         if not path or not isinstance(path, str):
             return {"error": "No file selected."}
         if not os.path.exists(path):
@@ -1585,7 +1585,7 @@ class Api:
         if not parsed:
             return {"error": "No rows found. Need columns: Draw #, Name, "
                              "Address, AA, BL, Last 4, Draw Fee, Wire Received, "
-                             "OUT, Going Out, Released On â€” with a real Address "
+                             "OUT, Going Out, Released On Ã¢â‚¬â€ with a real Address "
                              "in column C."}
         stats = import_loans(parsed)
         _sync_state["counter"] += 1
@@ -1820,7 +1820,7 @@ class Api:
                 return {"error": f"Sheet '{sheet}' not found in workbook"}
             n_rows = int(grid.get("rowCount", 1000))
             n_cols = int(grid.get("columnCount", 26))
-            # Write to the very last cell â€” almost certainly empty padding.
+            # Write to the very last cell Ã¢â‚¬â€ almost certainly empty padding.
             test_row, test_col = n_rows, n_cols
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S write-test")
             gsheet_write_cell(path, gs["spreadsheet_id"], sheet,
@@ -1829,12 +1829,12 @@ class Api:
                               test_row, test_col, "")
             return {"ok": True,
                     "cell":    f"{_col_letter(test_col)}{test_row}",
-                    "grid":    f"{n_rows} rows Ã— {n_cols} cols"}
+                    "grid":    f"{n_rows} rows Ãƒâ€” {n_cols} cols"}
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
 
     def get_progress_states(self):
-        """Constants for the JS UI â€” kept here so we have a single source of truth."""
+        """Constants for the JS UI Ã¢â‚¬â€ kept here so we have a single source of truth."""
         return {"order": PROGRESS_ORDER, "labels": PROGRESS_LABEL}
 
     def draw_progress_action(self, draw_id: int, new_state: str):
@@ -1843,10 +1843,10 @@ class Api:
 
         Returns one of:
           {"ok": True, "action": "moved", "from": ..., "to": ...}
-            â€” state was set without any side effect
+            Ã¢â‚¬â€ state was set without any side effect
           {"ok": True, "action": "run_script", "script": "draw-request",
            "draw_id": ..., "address": ...}
-            â€” JS should now invoke the script; state will advance via the
+            Ã¢â‚¬â€ JS should now invoke the script; state will advance via the
               poll_task auto-advance hook on success
         """
         if new_state not in PROGRESS_ORDER:
@@ -1988,7 +1988,7 @@ class Api:
             else:
                 t["output"].append(line)
         # If the task just finished successfully and was linked to a draw,
-        # advance that draw from not_started â†’ order_inspection (the merged
+        # advance that draw from not_started Ã¢â€ â€™ order_inspection (the merged
         # "submit draw request" semantic). Fires once per task.
         if (t["done"] and t["rc"] == 0
                 and t.get("draw_id") and not t.get("auto_advanced")):
@@ -2029,7 +2029,7 @@ class Api:
         """Run the draw-request worker for many addresses concurrently, capped
         at the configured worker count. If `addresses` is omitted, every loan
         address in the DB is used (i.e. everything you imported). The TEST/LIVE
-        mode and worker count both come from Settings â†’ Submit Draw Request."""
+        mode and worker count both come from Settings Ã¢â€ â€™ Submit Draw Request."""
         s  = _load_settings()
         dr = s["scripts"]["draw-request"]
         live = _as_bool(dr.get("live_submit"))

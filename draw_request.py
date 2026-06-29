@@ -519,6 +519,131 @@ def fill_proxypics(page: Page, data: dict, submit: bool = False) -> None:
 
 
 # ===========================================================================
+# Repeat-draw flow: search the existing photo-requests list, open the most
+# recent match for this address, click "Request New Draw Inspection", then
+# confirm. Used when an address already has a draw out.
+# ===========================================================================
+PROXYPICS_LIST_URL = "https://app.proxypics.com/photo-requests"
+
+
+def find_existing_draw(page: Page, address: str, timeout_ms: int = 12_000) -> str | None:
+    """Open the ProxyPics list, search by address, and return the FIRST row's
+    detail URL (e.g. '/photo-requests/1259864/show') if a result appears, or
+    None if no match. Robust to ant-design's debounced search behavior."""
+    print(f">>> Searching ProxyPics for existing draws at: {address!r}")
+    page.goto(PROXYPICS_LIST_URL, wait_until="domcontentloaded", timeout=30_000)
+
+    # Search input — id pulled from the markup the user provided.
+    search = page.locator("#addressICont")
+    try:
+        search.wait_for(state="visible", timeout=timeout_ms)
+    except PWTimeout:
+        print("    !! search box never appeared (login expired?).")
+        return None
+
+    # ant-design debounces searches; fill, then nudge with Enter to be safe.
+    search.fill("")  # clear any prior value
+    # Use a distinctive fragment of the address — the street number + first
+    # word usually uniquely matches and is more forgiving of formatting drift.
+    fragment = _search_fragment(address)
+    search.fill(fragment)
+    try:
+        search.press("Enter")
+    except Exception:
+        pass
+
+    # Wait for either rows to render or the "no data" state.
+    row_link = page.locator(
+        "tr.ant-table-row td a[href^='/photo-requests/'][href$='/show']"
+    ).first
+    empty = page.locator("div.ant-empty, td.ant-table-cell:has-text('No data')").first
+    try:
+        page.wait_for_function(
+            """() => {
+                const has = document.querySelector("tr.ant-table-row td a[href^='/photo-requests/'][href$='/show']");
+                const none = document.querySelector("div.ant-empty");
+                return Boolean(has || none);
+            }""",
+            timeout=timeout_ms,
+        )
+    except PWTimeout:
+        print("    !! search results never resolved.")
+        return None
+
+    if row_link.count() == 0:
+        print("    no existing draw found for that address.")
+        return None
+
+    href = row_link.get_attribute("href") or ""
+    if not href:
+        print("    !! matched row has no href.")
+        return None
+    print(f"    found existing draw → {href}")
+    return href
+
+
+def _search_fragment(address: str) -> str:
+    """Pick a search fragment that's distinctive but tolerant of differences in
+    how the address is formatted in our sheet vs. how ProxyPics stores it."""
+    a = address.strip()
+    if not a:
+        return a
+    # Take the part before the first comma if present (street line only).
+    head = a.split(",", 1)[0].strip()
+    # ProxyPics's search matches anywhere in the string, so the street line
+    # is usually plenty unique — and avoids zip/city mismatches.
+    return head or a
+
+
+def request_new_inspection_from_existing(page: Page, detail_href: str,
+                                         submit: bool = False,
+                                         timeout_ms: int = 15_000) -> None:
+    """Open an existing photo-request detail page, click 'Request New Draw
+    Inspection', and confirm (if submit=True). In test mode we stop at the
+    confirmation modal without clicking OK so nothing is created."""
+    url = "https://app.proxypics.com" + detail_href if detail_href.startswith("/") else detail_href
+    print(f">>> Opening existing draw: {url}")
+    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+
+    # "Request New Draw Inspection" — matched by exact button text.
+    req_btn = page.get_by_role("button", name="Request New Draw Inspection")
+    try:
+        req_btn.wait_for(state="visible", timeout=timeout_ms)
+    except PWTimeout:
+        raise RuntimeError(
+            "'Request New Draw Inspection' button never appeared on the detail "
+            "page. The draw may be in a state that doesn't allow re-inspection, "
+            "or the page didn't finish loading."
+        )
+    print(">>> Clicking 'Request New Draw Inspection'…")
+    req_btn.click()
+
+    # A confirmation modal appears with an OK button. In test mode we DO NOT
+    # click OK — the modal sits open so the user can verify, then close.
+    ok_btn = page.locator(".ant-modal .ant-btn-primary").get_by_text("OK", exact=True).first
+    try:
+        ok_btn.wait_for(state="visible", timeout=timeout_ms)
+    except PWTimeout:
+        # Maybe the button isn't in a modal — try a global lookup too.
+        ok_btn = page.get_by_role("button", name="OK").first
+        ok_btn.wait_for(state="visible", timeout=5_000)
+
+    if submit:
+        print(">>> LIVE — clicking OK to confirm the new draw request.")
+        ok_btn.click()
+        # Wait for the modal to close so we know the click registered.
+        try:
+            page.locator(".ant-modal").first.wait_for(state="hidden", timeout=timeout_ms)
+            print(">>> Confirmed. New draw inspection requested.")
+        except PWTimeout:
+            print("    !! modal didn't close after OK — check the page manually.")
+    else:
+        print(">>> TEST MODE — confirmation modal is open but OK was NOT clicked.")
+        print("    Close the modal manually if you want to abort, or re-run "
+              "with --submit to actually request the new inspection.")
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 def choose_contact(contacts: list[dict], preselect: str = "") -> dict:
@@ -635,6 +760,13 @@ def main() -> None:
                          "this flag the run fills everything and stops at Next.")
     ap.add_argument("--headless", action="store_true",
                     help="Run the browser with no visible window.")
+    ap.add_argument("--mode", choices=("auto", "new", "repeat"), default="auto",
+                    help="auto = search ProxyPics first; if the address already "
+                         "has a draw, request a new inspection on it; otherwise "
+                         "fall through to the new-draw flow. "
+                         "new = always create a brand-new draw. "
+                         "repeat = only request a new inspection on an existing "
+                         "draw (fails if none found).")
     args = ap.parse_args()
 
     # Allow override of the browser profile location (used when launched from
@@ -664,8 +796,32 @@ def main() -> None:
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
-        print(f">>> Looking up: {address!r}")
+        print(f">>> Mode: {args.mode}  |  {'LIVE' if args.submit else 'TEST'}")
+        print(f">>> Address: {address!r}")
 
+        # --- mode dispatch -------------------------------------------------
+        # auto / repeat first try to find an existing draw on ProxyPics.
+        # If found → click "Request New Draw Inspection" and (optionally) OK.
+        existing_href = None
+        if args.mode in ("auto", "repeat"):
+            existing_href = find_existing_draw(page, address)
+            if not existing_href and args.mode == "repeat":
+                print(">>> --mode repeat: no existing draw found. Exiting.")
+                ctx.close()
+                sys.exit(2)
+            if existing_href:
+                request_new_inspection_from_existing(
+                    page, existing_href, submit=args.submit
+                )
+                print(">>> Done. Close the browser window when you're finished reviewing.")
+                try:
+                    page.wait_for_event("close", timeout=0)
+                except Exception:
+                    pass
+                ctx.close()
+                return
+
+        # --- new-draw flow (mode=new, or mode=auto with no existing match) -
         # Local fast path: look the address up in the Draw Manager DB so we
         # can SKIP the brittle CF#-extraction step on the loan-detail page.
         # Casa search itself still uses the address (its search box only

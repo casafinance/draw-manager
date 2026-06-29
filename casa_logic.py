@@ -1185,10 +1185,26 @@ def fci_load_portfolio(api_key, address_field="propertyAddress", log=None):
 
 
 def fci_funding_for_loan(api_key, loan_account, amount_field="amountFunded", log=None):
-    """Returns (best_account, best_amount, rows) for a single loan. The amount
-    field name (used to pick the largest investor) must be passed in."""
-    q = (f"query Q($la:String!){{getFundingHistory(loanaccount:$la)"
-         f"{{lenderAccount {amount_field}}}}}")
+    """Returns (best_account, best_amount, rows) for a single loan.
+
+    Picks the PRINCIPAL LENDER — the investor that holds the most of the loan.
+
+    FCI's getFundingHistory exposes three real fields per row:
+        lenderAccount, principalBalance, originalBalance
+    A single loan often has MULTIPLE rows per investor (each funding tranche
+    is a separate row). The correct ownership signal is the SUM of
+    principalBalance across all rows for each lender, not any single row.
+
+    Algorithm:
+      1. Group by lenderAccount, sum principalBalance per account.
+      2. The account with the largest total principal wins.
+      3. If every principal is zero, fall back to summed originalBalance.
+      4. The configured `amount_field` (legacy: defaults to originalBalance)
+         is no longer used to pick — but we still return an amount for
+         logging purposes.
+    """
+    q = ("query Q($la:String!){getFundingHistory(loanaccount:$la)"
+         "{lenderAccount principalBalance originalBalance}}")
     data = fci_api_call(api_key, q, {"la": str(loan_account)})
     rows = data.get("getFundingHistory", [])
     if not isinstance(rows, list):
@@ -1197,13 +1213,42 @@ def fci_funding_for_loan(api_key, loan_account, amount_field="amountFunded", log
     if not rows:
         return None, 0.0, []
 
-    best_acct, best_amt = None, -1.0
+    def _num(v):
+        n = parse_amount(v)
+        return n if isinstance(n, (int, float)) else 0.0
+
+    # Sum principal + original per lenderAccount.
+    by_acct = {}  # acct -> {"principal": float, "original": float, "rows": int}
     for r in rows:
         acct = r.get("lenderAccount")
-        amt  = parse_amount(r.get(amount_field)) or 0.0
-        if acct and amt > best_amt:
-            best_amt, best_acct = amt, acct
-    return best_acct, best_amt, rows
+        if not acct:
+            continue
+        agg = by_acct.setdefault(acct, {"principal": 0.0, "original": 0.0, "rows": 0})
+        agg["principal"] += _num(r.get("principalBalance"))
+        agg["original"]  += _num(r.get("originalBalance"))
+        agg["rows"]      += 1
+
+    if not by_acct:
+        return None, 0.0, rows
+
+    # Pick by total principal; if all zero, fall back to total original.
+    have_principal = any(a["principal"] > 0 for a in by_acct.values())
+    sort_key = (lambda kv: kv[1]["principal"]) if have_principal \
+               else (lambda kv: kv[1]["original"])
+    ranked = sorted(by_acct.items(), key=sort_key, reverse=True)
+    winner_acct, winner = ranked[0]
+    winner_amt = winner["principal"] if have_principal else winner["original"]
+
+    if log and len(by_acct) > 1:
+        log(f"      {len(by_acct)} distinct investor(s) on {loan_account}; "
+            f"picked {winner_acct} (principal ${winner['principal']:,.2f} "
+            f"across {winner['rows']} row(s))")
+        for acct, agg in ranked:
+            mark = "→" if acct == winner_acct else " "
+            log(f"        {mark} acct={acct}  principal=${agg['principal']:,.2f}  "
+                f"original=${agg['original']:,.2f}  rows={agg['rows']}")
+
+    return winner_acct, winner_amt, rows
 
 
 def fci_api_lookup_auto(api_key, address, portfolio_cache, log=None,
