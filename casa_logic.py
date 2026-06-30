@@ -923,10 +923,20 @@ EXCEL_HEADER = ["Loan Number", "Investor Account Number", "Amount",
 
 
 def load_existing_rows(path):
-    """Return (list_of_dicts, max_row_used). Missing file is fine."""
-    if not os.path.exists(path):
+    """Return (list_of_dicts, max_row_used). Missing/empty/corrupt file is fine."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
         return [], 0
-    wb = load_workbook(path)
+    try:
+        wb = load_workbook(path)
+    except Exception as e:
+        # Corrupt/half-written xlsx — back it up so the next run starts fresh.
+        try:
+            bak = path + ".corrupt.bak"
+            os.replace(path, bak)
+            print(f"[load_existing_rows] {path} unreadable ({e}); moved to {bak}")
+        except Exception:
+            pass
+        return [], 0
     ws = wb.active
     rows = []
     for r in ws.iter_rows(min_row=2, values_only=True):
@@ -953,10 +963,16 @@ def is_row_complete(row: dict) -> bool:
 def write_rows(path, rows, *, append=True):
     """Write rows to the balance-update xlsx.  If `append` and file exists,
     the existing sheet is preserved and new rows are added at the bottom."""
-    if append and os.path.exists(path):
-        wb = load_workbook(path)
-        ws = wb.active
-        start_row = ws.max_row + 1
+    if append and os.path.exists(path) and os.path.getsize(path) > 0:
+        try:
+            wb = load_workbook(path)
+            ws = wb.active
+            start_row = ws.max_row + 1
+        except Exception:
+            wb = Workbook()
+            ws = wb.active
+            ws.append(EXCEL_HEADER)
+            start_row = 2
     else:
         wb = Workbook()
         ws = wb.active

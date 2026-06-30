@@ -1209,10 +1209,69 @@ def _draw_worker_cmd_head(s: dict):
     return [PYTHON, str(script)], None
 
 
-def _build_draw_cmd(s, dr, address, profile_dir, live, csv, headless=False):
+def _decide_mode_from_db(address: str) -> tuple[str, str]:
+    """Look the address up in draws.db and decide whether this should be a
+    'repeat' (renew on ProxyPics) or 'new' run, based on the OUT column from
+    the Google Sheet import (stored as draws.inspection_ordered).
+
+    Returns (mode, reason). `mode` is one of 'repeat', 'new', or 'auto' if
+    the address isn't in the DB (let the worker fall back to its own logic).
+    """
+    if not (address or "").strip():
+        return "auto", "no address"
+    # Normalize whitespace (handles NBSP from copy/paste) + lowercase.
+    needle = re.sub(r"\s+", " ",
+                    address.replace("\xa0", " ")
+                           .replace("\u202f", " ")
+                           .strip().lower())
+    try:
+        with _db_lock, _db() as c:
+            rows = c.execute(
+                "SELECT id, address FROM loans "
+                "WHERE address IS NOT NULL AND address != ''"
+            ).fetchall()
+    except Exception as e:
+        return "auto", f"db read failed: {e}"
+
+    def norm(s):
+        return re.sub(r"\s+", " ", (s or "").replace("\xa0", " ").strip().lower())
+
+    # 1. exact (normalized) match, then 2. stored startswith, then 3. typed startswith.
+    cand = next((r for r in rows if norm(r["address"]) == needle), None)
+    if not cand:
+        cand = next((r for r in rows if norm(r["address"]).startswith(needle)), None)
+    if not cand:
+        cand = next((r for r in rows if needle.startswith(norm(r["address"]))
+                                     and len(norm(r["address"])) >= 8), None)
+    if not cand:
+        return "auto", "address not in draws.db"
+
+    try:
+        with _db_lock, _db() as c:
+            latest = c.execute(
+                "SELECT draw_number, inspection_ordered "
+                "FROM draws WHERE loan_id=? "
+                "ORDER BY draw_number DESC LIMIT 1",
+                (cand["id"],),
+            ).fetchone()
+    except Exception as e:
+        return "auto", f"draws read failed: {e}"
+
+    if not latest:
+        return "new", "loan in DB, no draws yet â†’ new"
+    if latest["inspection_ordered"]:
+        return ("repeat",
+                f"draw #{latest['draw_number']} has OUT=TRUE â†’ renew on ProxyPics")
+    return ("new",
+            f"draw #{latest['draw_number']} has OUT=FALSE â†’ new draw")
+
+
+def _build_draw_cmd(s, dr, address, profile_dir, live, csv, headless=False,
+                    mode: str | None = None):
     """Assemble the worker command line for one address. Each run gets its own
     isolated browser profile (its own window) Ã¢â‚¬â€ the model that actually works.
-    Returns (cmd_list, None) or (None, {error})."""
+    Returns (cmd_list, None) or (None, {error}).
+    `mode` is forwarded as --mode {auto|new|repeat} when provided."""
     head, err = _draw_worker_cmd_head(s)
     if err:
         return None, err
@@ -1230,6 +1289,8 @@ def _build_draw_cmd(s, dr, address, profile_dir, live, csv, headless=False):
         cmd += ["--submit"]      # LIVE: worker will click Submit
     if headless:
         cmd += ["--headless"]
+    if mode in ("auto", "new", "repeat"):
+        cmd += ["--mode", mode]
     return cmd, None
 
 
@@ -1938,8 +1999,12 @@ class Api:
             return {"error": "Property address is empty."}
 
         live = _as_bool(dr.get("live_submit"))
+        # Let the worker decide: --mode auto means "search ProxyPics; if an
+        # existing draw exists â†’ renew; otherwise â†’ new draw". This is the
+        # simple, reliable path â€” no dependency on the sheet being fresh.
         cmd, err = _build_draw_cmd(s, dr, address, APP_DIR / ".pw-profile", live, csv,
-                                   headless=_as_bool(dr.get("headless")))
+                                   headless=_as_bool(dr.get("headless")),
+                                   mode="auto")
         if err:
             return err
         proc = subprocess.Popen(
@@ -2130,7 +2195,7 @@ class Api:
         profile = pool.get()
         try:
             cmd, err = _build_draw_cmd(s, dr, address, profile, live, csv,
-                                       headless=headless)
+                                       headless=headless, mode="auto")
             if err:
                 item["state"] = "failed"; item["rc"] = 2
                 item["output"].append(err["error"]); return

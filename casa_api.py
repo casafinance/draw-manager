@@ -27,6 +27,14 @@ from datetime import datetime
 import casa_logic as L
 
 
+def _truthy(v):
+    """Robust bool cast — the HTML sends select values as the strings
+    'true'/'false', and bool('false') is True. So treat strings explicitly."""
+    if isinstance(v, bool):  return v
+    if isinstance(v, str):   return v.strip().lower() in ("true", "1", "yes", "on")
+    return bool(v)
+
+
 def _fmt_amount(amt):
     return f"${amt:,.2f}" if isinstance(amt, (int, float)) else ""
 
@@ -138,9 +146,9 @@ class CasaApi:
             "today_sheet_name": (d.get("today_sheet_name") or "").strip(),
             "draw_sheet_name":  (d.get("draw_sheet_name") or "").strip() or "Draw",
             "output_xlsx":      (d.get("output_xlsx") or "").strip(),
-            "fci_auto":         bool(d.get("fci_auto", True)),
-            "fci_overwrite":    bool(d.get("fci_overwrite", False)),
-            "chrome_headless":  bool(d.get("chrome_headless", False)),
+            "fci_auto":         _truthy(d.get("fci_auto", True)),
+            "fci_overwrite":    _truthy(d.get("fci_overwrite", False)),
+            "chrome_headless":  _truthy(d.get("chrome_headless", False)),
             "fci_api_key":      (d.get("fci_api_key") or "").strip(),
         })
         L.save_config(self.cfg)

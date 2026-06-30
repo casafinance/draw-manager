@@ -2375,7 +2375,7 @@ const SCRIPTS = [
     statusText: 'READY',
     fields: [{ id:'address', label:'Property address', placeholder:'2307 Chestnut St, Houston, TX', required:true }],
     settingFields: [
-      { id:'inspection_type', label:'Inspection type', type:'text', placeholder:'draw inspection without floorplan' },
+      { id:'inspection_type', label:'Inspection type', type:'text', placeholder:'Draw Inspection without Floorplan/No 360 - Inspector' },
       { id:'progress_step',   label:'Progress step', type:'select', options:['1','5','10','15','20','25','50','75','100'] },
       { id:'contact_choice',  label:'Contact pick',  type:'select', options:[
           {value:'auto', label:'auto'},
@@ -2739,7 +2739,12 @@ panelRun.onclick = async () => {
   // If Parallel workers > 1, Run launches every imported loan in parallel
   // (per the worker count + TEST/LIVE mode set in settings).
   const workers = parseInt((scriptSettings && scriptSettings.workers) || '1', 10) || 1;
-  if (activeScript.slug === 'draw-request' && workers > 1) {
+  // If the user typed a single address (or used "Run from drawer" via
+  // _pendingDrawId), always run just that one — even if Parallel workers
+  // default is > 1. The parallel-batch path is for the import workflow only.
+  const singleAddr = panelBody.querySelector('input[data-fid="address"]')?.value.trim();
+  if (activeScript.slug === 'draw-request' && workers > 1
+      && !singleAddr && !_pendingDrawId) {
     // Run ONLY the loans from the last import — never the entire database.
     const addrs = _lastImportedAddrs.slice();
     if (!addrs.length) {

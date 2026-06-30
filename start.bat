@@ -12,15 +12,15 @@ if not exist ".venv\Scripts\python.exe" (
     python -m venv .venv || goto :error
     call .venv\Scripts\activate.bat
     python -m pip install --upgrade pip
-    python -m pip install playwright pywebview google-api-python-client google-auth openpyxl || goto :error
+    python -m pip install playwright pywebview google-api-python-client google-auth openpyxl pypdf || goto :error
     python -m playwright install chromium || goto :error
 ) else (
     call .venv\Scripts\activate.bat
     REM Top up any missing python deps from earlier installs.
-    .venv\Scripts\python.exe -c "import webview, googleapiclient, google.oauth2, openpyxl, playwright" 2>nul
+    .venv\Scripts\python.exe -c "import webview, googleapiclient, google.oauth2, openpyxl, playwright, pypdf" 2>nul
     if errorlevel 1 (
         echo [setup] Installing missing dependencies...
-        python -m pip install pywebview google-api-python-client google-auth openpyxl playwright || goto :error
+        python -m pip install pywebview google-api-python-client google-auth openpyxl pypdf playwright || goto :error
     )
     REM Make sure the chromium browser is present for draw_request.py.
     REM `playwright install chromium` is idempotent and only downloads if missing.
